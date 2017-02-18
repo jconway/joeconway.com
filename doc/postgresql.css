@@ -1,0 +1,20 @@
+BODY {
+ color: #000000;
+ background: #FFFFFF;
+}
+A {
+ font-family: helvetica,arial,sans-serif;
+ font-weight: normal;
+ font-size: 12px;
+ color: #020169;
+ text-decoration: none;
+}
+A:active { color: #6884A4; }
+A:visited { color: #6884A4; }
+A:hover	{ text-decoration: underline; color: #020169; }
+LI { font-family: helvetica,arial,sans-serif;  }
+BIG { text-decoration: none; font-family: helvetica,arial,sans-serif; font-weight: bold; font-size: 14px; }
+SMALL { text-decoration: none; font-family: helvetica,arial,sans-serif; font-weight: normal; font-size: 10px; }
+ol, ul, p, body, td, tr, th, form, span, div { font-family: helvetica,arial,sans-serif; font-size: 12px; }
+h1, h2, h3, h4, h5, h6 { font-family: helvetica,arial,sans-serif; }
+

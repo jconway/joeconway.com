@@ -1,0 +1,359 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<HTML
+><HEAD
+><TITLE
+>Window Functions</TITLE
+><META
+NAME="GENERATOR"
+CONTENT="Modular DocBook HTML Stylesheet Version 1.79"><LINK
+REV="MADE"
+HREF="mailto:pgsql-docs@postgresql.org"><LINK
+REL="HOME"
+TITLE="PL/R User's Guide - R Procedural Language"
+HREF="index.html"><LINK
+REL="PREVIOUS"
+TITLE="Aggregate Functions"
+HREF="plr-aggregate-funcs.html"><LINK
+REL="NEXT"
+TITLE="Loading R Modules at Startup"
+HREF="plr-module-funcs.html"><LINK
+REL="STYLESHEET"
+TYPE="text/css"
+HREF="stylesheet.css"><META
+HTTP-EQUIV="Content-Type"
+CONTENT="text/html; charset=ISO-8859-1"><META
+NAME="creation"
+CONTENT="2011-09-10T18:39:12"></HEAD
+><BODY
+CLASS="CHAPTER"
+><DIV
+CLASS="NAVHEADER"
+><TABLE
+SUMMARY="Header navigation table"
+WIDTH="100%"
+BORDER="0"
+CELLPADDING="0"
+CELLSPACING="0"
+><TR
+><TH
+COLSPAN="5"
+ALIGN="center"
+VALIGN="bottom"
+><A
+HREF="index.html"
+>PL/R User's Guide - R Procedural Language</A
+></TH
+></TR
+><TR
+><TD
+WIDTH="10%"
+ALIGN="left"
+VALIGN="top"
+><A
+TITLE="Aggregate Functions"
+HREF="plr-aggregate-funcs.html"
+ACCESSKEY="P"
+>Prev</A
+></TD
+><TD
+WIDTH="10%"
+ALIGN="left"
+VALIGN="top"
+><A
+TITLE="Aggregate Functions"
+HREF="plr-aggregate-funcs.html"
+>Fast Backward</A
+></TD
+><TD
+WIDTH="60%"
+ALIGN="center"
+VALIGN="bottom"
+></TD
+><TD
+WIDTH="10%"
+ALIGN="right"
+VALIGN="top"
+><A
+TITLE="Loading R Modules at Startup"
+HREF="plr-module-funcs.html"
+>Fast Forward</A
+></TD
+><TD
+WIDTH="10%"
+ALIGN="right"
+VALIGN="top"
+><A
+TITLE="Loading R Modules at Startup"
+HREF="plr-module-funcs.html"
+ACCESSKEY="N"
+>Next</A
+></TD
+></TR
+></TABLE
+><HR
+ALIGN="LEFT"
+WIDTH="100%"></DIV
+><DIV
+CLASS="CHAPTER"
+><H1
+><A
+NAME="PLR-WINDOW-FUNCS"
+></A
+>Chapter 9. Window Functions</H1
+><P
+>     Starting with version 8.4, PostgreSQL supports <TT
+CLASS="LITERAL"
+>WINDOW</TT
+>
+     functions which provide the ability to perform calculations across sets
+     of rows that are related to the current query row. This is comparable to
+     the type of calculation that can be done with an aggregate function. But
+     unlike regular aggregate functions, use of a window function does not
+     cause rows to become grouped into a single output row; the rows retain
+     their separate identities. Behind the scenes, the window function is able
+     to access more than just the current row of the query result. See the
+     PostgreSQL documentation for more general information related to the use
+     of this capability.
+    </P
+><P
+>     PL/R functions may be defined as <TT
+CLASS="LITERAL"
+>WINDOW</TT
+>. For example:
+     </P><PRE
+CLASS="PROGRAMLISTING"
+>CREATE OR REPLACE
+FUNCTION r_regr_slope(float8, float8)
+RETURNS float8 AS
+$BODY$
+  slope &#60;- NA
+  y &#60;- farg1
+  x &#60;- farg2 
+  if (fnumrows==9) try (slope &#60;- lm(y ~ x)$coefficients[2])
+  return(slope)
+$BODY$
+LANGUAGE plr WINDOW;
+     </PRE
+><P>
+    </P
+><P
+>     A number of variables are automatically provided by PL/R to the R
+     interpreter:
+    </P
+><P
+></P
+><DIV
+CLASS="VARIABLELIST"
+><DL
+><DT
+><TT
+CLASS="LITERAL"
+>farg</TT
+><TT
+CLASS="REPLACEABLE"
+><I
+>N</I
+></TT
+></DT
+><DD
+><P
+>        <TT
+CLASS="LITERAL"
+>farg1</TT
+> and <TT
+CLASS="LITERAL"
+>farg2</TT
+> are R vectors containing
+        the current row's data plus that of the related rows.
+       </P
+></DD
+><DT
+><TT
+CLASS="LITERAL"
+>fnumrows</TT
+></DT
+><DD
+><P
+>        The number of rows in the current <TT
+CLASS="LITERAL"
+>WINDOW</TT
+> frame.
+       </P
+></DD
+><DT
+><TT
+CLASS="LITERAL"
+>prownum</TT
+> (not shown)</DT
+><DD
+><P
+>        Provides the 1-based row offset of the current row in the current
+        <TT
+CLASS="LITERAL"
+>PARTITION</TT
+>.
+       </P
+></DD
+></DL
+></DIV
+><P
+>     A more complete example follows:
+
+     </P><PRE
+CLASS="PROGRAMLISTING"
+>-- create test table
+CREATE TABLE test_data (
+  fyear integer,
+  firm float8,
+  eps float8
+);
+
+-- insert randomly pertubated data for test
+INSERT INTO test_data
+SELECT (b.f + 1) % 10 + 2000 AS fyear,
+	floor((b.f+1)/10) + 50 AS firm,
+       f::float8/100 + random()/10 AS eps
+FROM generate_series(-500,499,1) b(f);
+
+CREATE OR REPLACE
+FUNCTION r_regr_slope(float8, float8)
+RETURNS float8 AS
+$BODY$
+  slope &#60;- NA
+  y &#60;- farg1
+  x &#60;- farg2 
+  if (fnumrows==9) try (slope &#60;- lm(y ~ x)$coefficients[2])
+  return(slope)
+$BODY$
+LANGUAGE plr WINDOW;
+
+SELECT *, r_regr_slope(eps, lag_eps) OVER w AS slope_R
+FROM (SELECT firm, fyear, eps,
+  lag(eps) OVER (ORDER BY firm, fyear) AS lag_eps
+FROM test_data) AS a
+WHERE eps IS NOT NULL
+WINDOW w AS (ORDER BY firm, fyear ROWS 8 PRECEDING);
+     </PRE
+><P>
+    </P
+><P
+>     In this example, the variables <TT
+CLASS="LITERAL"
+>farg1</TT
+> and <TT
+CLASS="LITERAL"
+>farg2</TT
+>
+     contain the current row value for eps and lag_eps, as well as the
+     preceding 8 rows which are also in the same <TT
+CLASS="LITERAL"
+>WINDOW</TT
+> frame
+     within the same <TT
+CLASS="LITERAL"
+>PARTITION</TT
+>. In this case since no
+     <TT
+CLASS="LITERAL"
+>PARTITION</TT
+> is explicitly defined, the <TT
+CLASS="LITERAL"
+>PARTITION</TT
+>
+     is the entire set of rows returned from the inner sub-select.
+    </P
+><P
+>     Another interesting example follows. The idea of
+     <SPAN
+CLASS="QUOTE"
+>"Winsorizing"</SPAN
+> is to return either the original value
+     or, if that value is outside certain bounds, a trimmed value. So for
+     example winsor(eps, 0.1) would return the value at the 10th percentile
+     for values of eps less that that, the value of the 90th percentile for
+     eps greater than that value, and the unmodified value of eps otherwise.
+
+     </P><PRE
+CLASS="PROGRAMLISTING"
+>CREATE OR REPLACE FUNCTION winsorize(float8, float8)
+RETURNS float8 AS
+$BODY$
+  library(psych)
+  return(winsor(as.vector(farg1), arg2)[prownum])
+$BODY$ LANGUAGE plr VOLATILE WINDOW;
+
+SELECT fyear, eps, 
+  winsorize(eps, 0.1) OVER (PARTITION BY fyear) AS w_eps
+FROM test_data ORDER BY fyear, eps;
+     </PRE
+><P>
+    </P
+><P
+>     In this example, use of the variable <TT
+CLASS="LITERAL"
+>prownum</TT
+>
+     is illustrated.
+    </P
+></DIV
+><DIV
+CLASS="NAVFOOTER"
+><HR
+ALIGN="LEFT"
+WIDTH="100%"><TABLE
+SUMMARY="Footer navigation table"
+WIDTH="100%"
+BORDER="0"
+CELLPADDING="0"
+CELLSPACING="0"
+><TR
+><TD
+WIDTH="33%"
+ALIGN="left"
+VALIGN="top"
+><A
+HREF="plr-aggregate-funcs.html"
+ACCESSKEY="P"
+>Prev</A
+></TD
+><TD
+WIDTH="34%"
+ALIGN="center"
+VALIGN="top"
+><A
+HREF="index.html"
+ACCESSKEY="H"
+>Home</A
+></TD
+><TD
+WIDTH="33%"
+ALIGN="right"
+VALIGN="top"
+><A
+HREF="plr-module-funcs.html"
+ACCESSKEY="N"
+>Next</A
+></TD
+></TR
+><TR
+><TD
+WIDTH="33%"
+ALIGN="left"
+VALIGN="top"
+>Aggregate Functions</TD
+><TD
+WIDTH="34%"
+ALIGN="center"
+VALIGN="top"
+>&nbsp;</TD
+><TD
+WIDTH="33%"
+ALIGN="right"
+VALIGN="top"
+>Loading R Modules at Startup</TD
+></TR
+></TABLE
+></DIV
+></BODY
+></HTML
+>

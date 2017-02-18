@@ -1,0 +1,2604 @@
+diff -cNr postgresql-9.1.2/contrib/event_load/event_load.c postgresql-9.1.2-ew/contrib/event_load/event_load.c
+*** postgresql-9.1.2/contrib/event_load/event_load.c	1969-12-31 16:00:00.000000000 -0800
+--- postgresql-9.1.2-ew/contrib/event_load/event_load.c	2012-03-15 09:59:38.378521880 -0700
+***************
+*** 0 ****
+--- 1,2386 ----
++ /*
++  * event_load
++  *
++  *
++  */
++ #include "postgres.h"
++ #include "libpq-fe.h"
++ #include "libpq/md5.h"
++ 
++ #include "fmgr.h"
++ #include "executor/spi.h"
++ #include "lib/stringinfo.h"
++ #include "miscadmin.h"
++ #include "utils/builtins.h"
++ #include "utils/datetime.h"
++ #include "utils/memutils.h"
++ #include "utils/varbit.h"
++ #include "event_load.h"
++ 
++ #include <time.h>
++ #include <sys/time.h>
++ 
++ PG_MODULE_MAGIC;
++ 
++ #define MAX_EVENT_LINESIZE		4096
++ #define COPY_TGT_WEB			"url_access"
++ #define COPY_TGT_IMP2P			"im_p2p"
++ #define PARTITION_TBLNAME_FMT	"%Y_%m_%d"
++ #define PARTITION_CRITERIA_FMT	"%Y-%m-%d"
++ #define COPY_FMT				"%Y-%m-%d %H:%M:%S"
++ 
++ #define PG_CSTR_GET_TEXT(cstrp) DatumGetTextP(DirectFunctionCall1(textin, CStringGetDatum(cstrp)))
++ #define PG_TEXT_GET_CSTR(textp) DatumGetCString(DirectFunctionCall1(textout, PointerGetDatum(textp)))
++ #define PG_VARBIT_GET_CSTR(varbitp) DatumGetCString(DirectFunctionCall1(varbit_out, PointerGetDatum(varbitp)))
++ 
++ #define EVENT_RES_ERROR(this_conn, msg2) \
++ 	do { \
++ 			char *emsg; \
++ 			emsg = pstrdup(PQerrorMessage(this_conn)); \
++ 			if(fp) fclose(fp); \
++ 			fp = NULL; \
++ 			PQfinish(conn_copy); \
++ 			PQfinish(conn_dim); \
++ 			elog(ERROR, "%s: %s", msg2, emsg); \
++ 	} while (0)
++ #define CHECK_EVENT_ATTR(attr) \
++ 	if (!attr || attr[0]=='\0') { \
++ 		elog(WARNING, "Attribute %s is empty. Skip event",#attr); \
++ 		continue; \
++ 	}
++ #define CHECK_EVENT_ATTR_LEN(attr, len) \
++ 	if (!attr || attr[0]=='\0' || strlen(attr) > len) { \
++ 		elog(WARNING, "Attribute %s is either empty or too long. Skip event",#attr); \
++ 		continue; \
++ 	}
++ #define CHECK_EVENT_ATTR_LEN_ONLY(attr, len) \
++ 	if (attr && strlen(attr) > len){ \
++ 		elog(WARNING, "Attribute %s exceeds maximum length. Skip event",#attr); \
++ 		continue; \
++ 	}
++ #define CLEANUP_AND_THROW_ERROR(_msg_) \
++ 	do \
++ 	{ \
++ 		if(fp) fclose(fp); \
++ 		fp = NULL; \
++ 		PQfinish(conn_copy); \
++ 		PQfinish(conn_dim); \
++ 		elog(ERROR, _msg_); \
++ 	} while (0)
++ 
++ /* User hash table support */
++ #define MAX_USERNAME_LEN		128		/* defined in authd.h NOTE: currently it is 32 but i know in future versions it will increase to 128*/
++ #define MAX_IPADDR_LEN			16		/* xxx.xxx.xxx.xxx + nul terminator */
++ #define MAX_PROFILE_LEN			32		/* defined in authd.h */
++ #define USER_HASH_LEN			MAX_USERNAME_LEN + MAX_IPADDR_LEN + MAX_PROFILE_LEN
++ #define NUM_USER_HASH_ENT		100000		/* expected number of user records, (128+4) * 0.1 =13.2 Mbytes*/
++ static HTAB *user_HashTable = NULL;
++ 
++ /* Host hash table support */
++ #define MAX_HOST_LEN			255		/* RFC 1035 */
++ #define MAX_DOMAIN_LEN			255		/* RFC 1035 */
++ #define HOST_HASH_LEN			16		/* MD5 HASH -- hex , it is important to make key size small because the number of entries in this table may be very high. We take the risk of collision*/
++ #define NUM_HOST_HASH_ENT		(NUM_USER_HASH_ENT * 100) /* expected number of host records, 10 million, (16+4) * 10 = 200Mbytes */
++ static HTAB *host_HashTable = NULL;
++ 
++ /* Rating hash table support */
++ #define MAX_RATING_LEN			128		/* rating bitmap length */
++ #define RATING_HASH_LEN			128		/* We can compress it to 128 bits -- 16 bytes, but why bother */
++ #define NUM_RATING_HASH_ENT		5000	/* expected number of rating records */
++ static HTAB *rating_HashTable = NULL;
++ 
++ /* cat_map hash table support */
++ #define NUM_CATMAP_HASH_ENT		128		/* expected number of cat_map records */
++ static HTAB *catmap_HashTable = NULL;
++ 
++ char *rating_bits[] = {
++ "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010",
++ "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"
++ };
++ 
++ typedef enum
++ {
++ 	HASH_USER,
++ 	HASH_HOST,
++ 	HASH_RATING,
++ 	HASH_CATMAP
++ } HashType;
++ 
++ typedef enum
++ {
++ 	TGT_WEB = 0,
++ 	TGT_IMP2P = 1
++ } TgtType;
++ 
++ typedef struct user_HashTableEnt
++ {
++ 	char		key[USER_HASH_LEN];
++ 	int			user_id;
++ }	user_HashTableEnt;
++ 
++ typedef struct host_HashTableEnt
++ {
++ 	char		key[HOST_HASH_LEN];
++ 	int			host_id;
++ }	host_HashTableEnt;
++ 
++ typedef struct rating_HashTableEnt
++ {
++ 	char		key[RATING_HASH_LEN];
++ 	int			rating_id;
++ }	rating_HashTableEnt;
++ 
++ typedef struct catmap_HashTableEnt
++ {
++ 	int32		catmap_id;
++ 	char	   *cat_long;
++ 	char	   *cat_short;
++ }	catmap_HashTableEnt;
++ 
++ typedef struct oneCopyTgt
++ {
++ 	TgtType		tgt_type;
++ 	char	   *start_time;
++ 	char	   *end_time;
++ 	char	   *tablename;
++ 	bool		is_new;
++ 	StringInfo	copystr;
++ }	oneCopyTgt;
++ 
++ typedef struct copyTgts
++ {
++ 	int			numtgts;
++ 	oneCopyTgt *tgt;
++ }	copyTgts;
++ 
++ typedef struct userKey
++ {
++ 	char	   *user_name;
++ 	char	   *ip;
++ 	char	   *profile;
++ }	userKey;
++ 
++ typedef struct hostKey
++ {
++ 	char	   *url_domain;
++ 	char	   *url_begin;
++ }	hostKey;
++ 
++ typedef struct ratingKey
++ {
++ 	char	   *rating;
++ }	ratingKey;
++ 
++ typedef struct catmapKey
++ {
++ 	int32		catmap_id;
++ 	char	   *cat_long;
++ 	char	   *cat_short;
++ }	catmapKey;
++ 
++ static int initHashVar(HashType hash_type);
++ static int getDimFromHash(HashType hash_type, void *key);
++ static catmapKey *getCatFromHash(HashType hash_type, int32 key);
++ static void addToHash(HashType hash_type, void *key, int id);
++ static HTAB *createHash(HashType hash_type);
++ static PGconn *dbConnect(char *connstr);
++ static char *escape_backslash(char *rawstr);
++ static int getCurrentTgt(copyTgts *copy_tgts, time_t raw_time, int record_type, char *connstr);
++ static void getConnStr(StringInfo connstr, int port);
++ static int getiPrismId(int sn, int *tzoffset);
++ static void doCopy(copyTgts *copy_tgts);
++ static int getDim(HashType hash_type, void *key);
++ static char * nstrtok(char *s, const char *delim);
++ static char *getPartitionStr(Timestamp timestamp, bool is_tblname, bool trunc_time);
++ static Timestamp time_t_to_timestamp(time_t tm);
++ static bool checkPartitionExists(char *tablename);
++ 
++ static int32		copy_batch_size = 0;
++ static bool			event_processing_initialized = FALSE;
++ static bool			user_hash_initialized = FALSE;
++ static bool			host_hash_initialized = FALSE;
++ static bool			rating_hash_initialized = FALSE;
++ static bool			catmap_hash_initialized = FALSE;
++ 
++ static PGconn	   *conn_copy = NULL;
++ static PGconn	   *conn_dim = NULL;
++ static FILE	   *fp = NULL;
++ 
++ PG_FUNCTION_INFO_V1(partition_tblname);
++ Datum
++ partition_tblname(PG_FUNCTION_ARGS)
++ {
++ 	Timestamp		timestamp = PG_GETARG_TIMESTAMP(0);
++ 
++ 	PG_RETURN_TEXT_P(PG_CSTR_GET_TEXT(getPartitionStr(timestamp, TRUE, FALSE)));
++ }
++ 
++ 
++ PG_FUNCTION_INFO_V1(init_event_processing);
++ Datum
++ init_event_processing(PG_FUNCTION_ARGS)
++ {
++ 	int			user_recs;
++ 	int			host_recs;
++ 	int			rating_recs;
++ 	int			catmap_recs;
++ 	StringInfo	str = makeStringInfo();
++ 
++ 	copy_batch_size = PG_GETARG_INT32(0);
++ 
++ 	/* force reinit */
++ 	user_hash_initialized = FALSE;
++ 	host_hash_initialized = FALSE;
++ 	rating_hash_initialized = FALSE;
++ 	catmap_hash_initialized = FALSE;
++ 
++ 	user_recs = initHashVar(HASH_USER);
++ 	host_recs = initHashVar(HASH_HOST);
++ 	rating_recs = initHashVar(HASH_RATING);
++ 	catmap_recs = initHashVar(HASH_CATMAP);
++ 
++ 	event_processing_initialized = TRUE;
++ 	appendStringInfo(str, "OK: U %d, H %d, R %d, C %d",
++ 						  user_recs, host_recs, rating_recs, catmap_recs);
++ 	PG_RETURN_TEXT_P(PG_CSTR_GET_TEXT(str->data));
++ }
++ 
++ PG_FUNCTION_INFO_V1(process_event_file);
++ Datum
++ process_event_file(PG_FUNCTION_ARGS)
++ {
++ 	char		   *filepath;
++ 	int32			sn;
++ 	StringInfo		connstr = makeStringInfo();
++ 	PGresult	   *res = NULL;
++ 	int				port;
++ 	int				iprism_id;
++ 	int				tzoffset = 0;
++ 	int32			cntr = 0;
++ 	int32			tot_cntr = 0;
++ 	StringInfo		result = makeStringInfo();
++ 	copyTgts	   *copy_tgts = palloc(sizeof(copyTgts));
++ 	int				i;
++ 	bool			first = TRUE;
++ 	time_t			start_time =time(0);
++ 	struct timeval	copy_timeval;
++ 	struct timeval	getdim_user_timeval;
++ 	struct timeval	getdim_host_timeval;
++ 	struct timeval	getdim_rating_timeval;
++ 	struct timeval	tmp_timeval;
++ 	struct timeval	tmp1_timeval;
++ 
++ 	copy_timeval.tv_sec =0;
++ 	copy_timeval.tv_usec =0;
++ 	getdim_user_timeval.tv_sec =0;
++ 	getdim_user_timeval.tv_usec =0;
++ 	getdim_host_timeval.tv_sec =0;
++ 	getdim_host_timeval.tv_usec =0;
++ 	getdim_rating_timeval.tv_sec =0;
++ 	getdim_rating_timeval.tv_usec =0;
++ 
++ 	/* refuse to run if we're not ready */
++ 	if (!event_processing_initialized)
++ 		elog(ERROR, "event processing not initialized");
++ 
++ 	/* get arguments */
++ 	port = PG_GETARG_INT32(0);
++ 	filepath = PG_TEXT_GET_CSTR(PG_GETARG_TEXT_P(1));
++ 	sn = PG_GETARG_INT32(2);
++ 
++ 	/* initialize COPY target array */
++ 	copy_tgts->numtgts = 0;
++ 	copy_tgts->tgt = NULL;
++ 
++ 	/* get the connection string passed to libpq */
++ 	getConnStr(connstr, port);
++ 
++ 	/* get id of current iprism_info record based on serial number */
++ 	iprism_id = getiPrismId(sn, &tzoffset);
++ 
++ 	/* open event file and get started */
++ 	fp = fopen(filepath, "rb");
++ 	if (fp == NULL)
++ 		elog(ERROR, "Error reading file: %s", filepath);
++ 
++ 	/*
++ 	 * open libpq connections - one for the COPY, and one for
++ 	 * dimension table maintenance
++ 	 */
++ 	conn_copy = dbConnect(connstr->data);
++ 	conn_dim = dbConnect(connstr->data);
++ 
++ 	/* start a transaction for the outer COPY loop */
++ 	res = PQexec(conn_copy, "BEGIN");
++ 	if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK)) {
++ 		EVENT_RES_ERROR(conn_copy, "failed to start transaction for COPY");
++ 	}
++ 	PQclear(res);
++ 
++ 	do
++ 	{
++ 		char			buf[MAX_EVENT_LINESIZE];
++ 		char		   *record_type_buf = NULL;
++ 		char		   *raw_time_buf = NULL;
++ 		char		   *user_name = NULL;
++ 		char		   *profile = NULL;
++ 		char		   *action = NULL;
++ 		char		   *ip = NULL;
++ 		char		   *bandwidth = NULL;
++ 		char		   *duration = NULL;
++ 		char		   *mime_type = NULL;
++ 		char		   *rating = NULL;
++ 		char		   *url_protocol = NULL;
++ 		char		   *url_domain = NULL;
++ 		char		   *application = NULL;
++ 		char		   *url_begin = NULL;
++ 		char		   *url_path = NULL;
++ 		char		   *url_info = NULL;
++ 		int				user_id;
++ 		int				host_id;
++ 		int				rating_id;
++ 		int				record_type;
++ 		time_t			raw_time = 0;
++ 		char		   *event_time;
++ 		int				current_tgt = -1;
++ 		userKey		   *user_key;
++ 		hostKey		   *host_key;
++ 		ratingKey	   *rating_key;
++ 		char		   *p = NULL;
++ 
++ 		p = fgets(buf, MAX_EVENT_LINESIZE, fp);
++ 		if ((p == NULL) || (cntr == copy_batch_size))
++ 		{
++ 			if (cntr > 0)
++ 			{
++ 				gettimeofday(&tmp_timeval, 0);
++ 				doCopy(copy_tgts);
++ 				gettimeofday(&tmp1_timeval, 0);
++ 				copy_timeval.tv_sec += tmp1_timeval.tv_sec - tmp_timeval.tv_sec;
++ 				copy_timeval.tv_usec += tmp1_timeval.tv_usec - tmp_timeval.tv_usec;
++ 				/* reset the batch counter */
++ 				cntr = 0;
++ 			}
++ 			if (p == NULL)
++ 				/* nothing left -- we're all done */
++ 				break;
++ 		}
++ 
++ 		/*
++ 		 * we first need the record type and timestamp for the
++ 		 * record so we can decide where it goes
++ 		 */
++  		if (buf[strlen(buf)-1] == '\n')
++ 			buf[strlen(buf)-1] ='\0';
++ 		record_type_buf = nstrtok(buf, "\t");
++ 		CHECK_EVENT_ATTR(record_type_buf);
++ 		record_type = atoi(record_type_buf);
++ 
++ 		raw_time_buf = nstrtok(NULL, "\t");
++ 		CHECK_EVENT_ATTR(raw_time_buf);
++ 		raw_time = (time_t) atol(raw_time_buf) + tzoffset;
++ 
++ 		event_time = getPartitionStr(time_t_to_timestamp(raw_time), FALSE, FALSE);
++ 		elog(DEBUG1, "cntr: %d, event timestamp: %s", cntr, event_time);
++ 
++ 		/* find the index for our target destination */
++ 		current_tgt = getCurrentTgt(copy_tgts, raw_time, record_type, connstr->data);
++ 
++ 		/* now parse the rest of the row */
++ 		if (record_type == 0)
++ 		{
++ 			user_name = nstrtok(NULL, "\t");
++ 			profile = nstrtok(NULL, "\t");
++ 			action = nstrtok(NULL, "\t");
++ 			ip = nstrtok(NULL, "\t");
++ 			bandwidth = nstrtok(NULL, "\t");
++ 			duration = nstrtok(NULL, "\t");
++ 			mime_type = nstrtok(NULL, "\t");
++ 			rating = nstrtok(NULL, "\t");
++ 			url_protocol = nstrtok(NULL, "\t");
++ 			url_begin = nstrtok(NULL, "\t");
++ 			url_domain = nstrtok(NULL, "\t");
++ 			url_path = nstrtok(NULL, "\t");
++ 			url_info = nstrtok(NULL, "\t");
++ 			/* a tab may not be present at the end 
++                            of line if url_info is null */
++ 			url_info = url_info ? url_info: "";
++ 	
++ 			/* these fields may not be empty */
++ 			CHECK_EVENT_ATTR_LEN(user_name, MAX_USERNAME_LEN);
++ 			CHECK_EVENT_ATTR_LEN(profile, MAX_PROFILE_LEN);
++ 			CHECK_EVENT_ATTR(action);
++ 			CHECK_EVENT_ATTR_LEN(ip, MAX_IPADDR_LEN);
++ 			CHECK_EVENT_ATTR(bandwidth);
++ 			CHECK_EVENT_ATTR(duration);
++ 			CHECK_EVENT_ATTR(mime_type);
++ 			CHECK_EVENT_ATTR_LEN(rating, MAX_RATING_LEN);
++ 			CHECK_EVENT_ATTR(url_protocol);
++ 			CHECK_EVENT_ATTR_LEN_ONLY(url_begin, MAX_HOST_LEN);
++ 			CHECK_EVENT_ATTR_LEN(url_domain, MAX_DOMAIN_LEN);
++ 		}
++ 		else
++ 		{
++ 			/*
++ 			 * don't bother checking record_type == 1 here, because
++ 			 * if it was something else, getCurrentTgt() would have already
++ 			 * complained
++ 			 */
++ 
++ 			user_name = nstrtok(NULL, "\t");
++ 			profile = nstrtok(NULL, "\t");
++ 			action = nstrtok(NULL, "\t");
++ 			ip = nstrtok(NULL, "\t");
++ 			url_protocol = nstrtok(NULL, "\t");
++ 			application = nstrtok(NULL, "\t");
++ 
++ 			/* these fields may not be empty */
++ 			CHECK_EVENT_ATTR_LEN(user_name, MAX_USERNAME_LEN);
++ 			CHECK_EVENT_ATTR_LEN(profile, MAX_RATING_LEN);
++ 			CHECK_EVENT_ATTR(action);
++ 			CHECK_EVENT_ATTR_LEN(ip, MAX_RATING_LEN);
++ 			CHECK_EVENT_ATTR(url_protocol);
++ 			/* CHECK_EVENT_ATTR(application); sometimes application field is empty*/
++ 		}
++ 
++ 		/* got a new record, so increment the row counters */
++ 		++cntr;
++ 		++tot_cntr;
++ 		elog(DEBUG1, "cntr: %d, tot cntr: %d", cntr, tot_cntr);
++ 
++ 
++ 		/* lookup user */
++ 		user_key = palloc(sizeof(userKey));
++ 		user_key->user_name = user_name;
++ 		user_key->ip = ip;
++ 		user_key->profile = profile;
++ 		gettimeofday(&tmp_timeval, 0);
++ 		user_id = getDim(HASH_USER, user_key);
++ 		gettimeofday(&tmp1_timeval, 0);
++ 		getdim_user_timeval.tv_sec += tmp1_timeval.tv_sec - tmp_timeval.tv_sec;
++ 		getdim_user_timeval.tv_usec += tmp1_timeval.tv_usec - tmp_timeval.tv_usec;
++ 
++ 		/* add processed row to COPY buffer */
++ 		if (copy_tgts->tgt[current_tgt].tgt_type == TGT_WEB)
++ 		{
++ 			/* lookup host */
++ 			host_key = palloc(sizeof(hostKey));
++ 			host_key->url_domain = url_domain;
++ 			host_key->url_begin = url_begin;
++ 			gettimeofday(&tmp_timeval, 0);
++ 			host_id = getDim(HASH_HOST, host_key);
++ 			gettimeofday(&tmp1_timeval, 0);
++ 			getdim_host_timeval.tv_sec += tmp1_timeval.tv_sec - tmp_timeval.tv_sec;
++ 			getdim_host_timeval.tv_usec += tmp1_timeval.tv_usec - tmp_timeval.tv_usec;
++ 
++ 			/* lookup rating */
++ 			rating_key = palloc(sizeof(ratingKey));
++ 			rating_key->rating = rating;
++ 			gettimeofday(&tmp_timeval, 0);
++ 			rating_id = getDim(HASH_RATING, rating_key);
++ 			gettimeofday(&tmp1_timeval, 0);
++ 			getdim_rating_timeval.tv_sec += tmp1_timeval.tv_sec - tmp_timeval.tv_sec;
++ 			getdim_rating_timeval.tv_usec += tmp1_timeval.tv_usec - tmp_timeval.tv_usec;
++ 
++ 			appendStringInfo(copy_tgts->tgt[current_tgt].copystr,
++ 							 "%s\t%d\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
++ 							 event_time, iprism_id, user_id, host_id, rating_id,
++ 							 bandwidth, duration, action, url_protocol,
++ 							 mime_type, escape_backslash(url_path), url_info);
++ 		}
++ 		else if (copy_tgts->tgt[current_tgt].tgt_type == TGT_IMP2P)
++ 		{
++ 			appendStringInfo(copy_tgts->tgt[current_tgt].copystr,
++ 							 "%s\t%d\t%d\t%s\t%s\t%s\n",
++ 							 event_time, iprism_id, user_id,
++ 							 url_protocol, action, application);
++ 		}
++ 		else
++ 			CLEANUP_AND_THROW_ERROR("unknown record type");
++ 
++ 	} while (1);
++ 
++ 	fclose(fp);
++ 	fp = NULL;
++ 
++ 	/*
++ 	 * Maintain partition_table_status table.
++ 	 *
++ 	 * Only deal with non-new, updated partitions here, because the record
++ 	 * for new partitions is inserted when the partition is created
++ 	 */
++ 	for (i = 0; i < copy_tgts->numtgts; ++i)
++ 	{
++ 		if (!copy_tgts->tgt[i].is_new)
++ 		{
++ 			StringInfo		pts_sql_s = makeStringInfo();
++ 			char		   *status;
++ 
++ 			/*
++ 			 * this was an already existing partition
++ 			 * - if there is no row in the table, do nothing
++ 			 * - If there is a row in the table, AND and status is 'R', mark it as 'U'.
++ 			 * - do nothing otherwise
++ 			 */
++ 			appendStringInfo(pts_sql_s,
++ 							 "SELECT status FROM partition_table_status WHERE table_name = %s",
++ 							 quote_literal_cstr(copy_tgts->tgt[i].tablename));
++ 		
++ 			res = PQexec(conn_copy, pts_sql_s->data);
++ 			if (!res || (PQresultStatus(res) != PGRES_TUPLES_OK))
++ 			{
++ 				elog(DEBUG1, "%s", pts_sql_s->data);
++ 				EVENT_RES_ERROR(conn_copy, "partition_table_status table search failed");
++ 			}
++ 		
++ 			if (PQntuples(res) == 1)
++ 			{
++ 				status = PQgetvalue(res, 0, 0);
++ 			}
++ 			else if (PQntuples(res) > 1)
++ 			{
++ 				/* can't happen if table_name is the primary key */
++ 				status = NULL;
++ 				elog(DEBUG1, "%s", pts_sql_s->data);
++ 				EVENT_RES_ERROR(conn_copy, "partition_table_status table search failed");
++ 			}
++ 			else
++ 				status = NULL;
++ 
++ 			PQclear(res);
++ 
++ 			if (status && status[0] == 'R')
++ 			{
++ 				StringInfo		pts_sql = makeStringInfo();
++ 
++ 				res = PQexec(conn_dim, "BEGIN; LOCK TABLE partition_table_status IN EXCLUSIVE MODE");
++ 	                        if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++                                 	EVENT_RES_ERROR(conn_dim, "failed to LOCK partition_table_status table");
++ 				PQclear(res);
++ 
++ 				appendStringInfo(pts_sql,
++ 								"update partition_table_status set start_time = %s, end_time = %s, status = %s "
++ 								"where table_name = %s",
++ 								quote_literal_cstr(copy_tgts->tgt[i].start_time),
++ 								quote_literal_cstr(copy_tgts->tgt[i].end_time),
++ 								"'U'",
++ 								quote_literal_cstr(copy_tgts->tgt[i].tablename));
++ 				elog(DEBUG1, "UPDATE partition_table_status: %s", pts_sql->data);
++ 				res = PQexec(conn_dim, pts_sql->data);
++ 				if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++ 					EVENT_RES_ERROR(conn_dim, "failed to update partition_table_status table");
++ 				PQclear(res);
++ 	                        /* COMMIT/release the table LOCK */
++        	                 	res = PQexec(conn_dim, "COMMIT");
++                         	if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++                                 	EVENT_RES_ERROR(conn_dim, "failed to COMMIT/UNLOCK partition_table_status table");
++ 				PQclear(res);
++ 			}
++ 		}
++ 	}
++ 
++ 	/* commit transaction for the outer COPY loop */
++ 	res = PQexec(conn_copy, "COMMIT");
++ 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
++ 		EVENT_RES_ERROR(conn_copy, "failed to commit transaction for COPY");
++ 	PQclear(res);
++ 
++ 	/* close the libpq connections */
++ 	PQfinish(conn_copy);
++ 	PQfinish(conn_dim);
++ 
++ 	elog(NOTICE, "total rows processed: %d", tot_cntr);
++ 	elog(NOTICE, "total time: %d seconds", (int) (time(0) - start_time));
++ 	elog(NOTICE, "copy time: %d sec, %d usec" , (int) copy_timeval.tv_sec, (int) copy_timeval.tv_usec);
++ 	elog(NOTICE, "getdim host time: %d sec, %d usec", (int) getdim_host_timeval.tv_sec, (int) getdim_host_timeval.tv_usec);
++ 	elog(NOTICE, "getdim user time: %d sec, %d usec", (int) getdim_user_timeval.tv_sec, (int) getdim_user_timeval.tv_usec);
++ 	elog(NOTICE, "getdim rating time: %d sec, %d usec", (int) getdim_rating_timeval.tv_sec, (int) getdim_rating_timeval.tv_usec);
++ 	/* return the final result */
++ 	for (i = 0; i < copy_tgts->numtgts; ++i)
++ 	{
++ 		if (copy_tgts->tgt[i].is_new)
++ 		{
++ 			if (!first)
++ 				appendStringInfo(result, ",%s", copy_tgts->tgt[i].tablename);
++ 			else
++ 			{
++ 				appendStringInfo(result, "%s", copy_tgts->tgt[i].tablename);
++ 				first = FALSE;
++ 			}
++ 		}
++ 	}
++ 
++ 	PG_RETURN_TEXT_P(PG_CSTR_GET_TEXT(result->data));
++ }
++ 
++ PG_FUNCTION_INFO_V1(rating_categories);
++ Datum
++ rating_categories(PG_FUNCTION_ARGS)
++ {
++ 	StringInfo	str = makeStringInfo();
++ 	char	   *rating = PG_VARBIT_GET_CSTR(PG_GETARG_VARBIT_P(0));
++ 	int32		ret_type = PG_GETARG_INT32(1);
++ 	int			i;
++ 	catmapKey  *catmap_key;
++ 
++ 	if (!catmap_hash_initialized)
++ 		initHashVar(HASH_CATMAP);
++ 
++ 	for (i = 0; i < strlen(rating); ++i)
++ 	{
++ 		if (rating[i] == '1')
++ 		{
++ 			catmap_key = getCatFromHash(HASH_CATMAP, i);
++ 
++ 			if (catmap_key)
++ 			{
++ 				if (ret_type == 0)
++ 					appendStringInfo(str, "%s,", catmap_key->cat_long);
++ 				else if (ret_type == 1)
++ 					appendStringInfo(str, "%s,", catmap_key->cat_short);
++ 				else
++ 					elog(ERROR, "unknown return type; use 0 for \"long\" or 1 for \"short\"");
++ 			}
++ 			else
++ 				elog(ERROR, "category for rating not found in cat_map table");
++ 		}
++ 	}
++ 
++ 	/* remove final comma */
++ 	str->data[str->len - 1] = '\0';
++ 	PG_RETURN_TEXT_P(PG_CSTR_GET_TEXT(str->data));
++ }
++ 
++ /*
++  * internal functions
++  */
++ static int
++ initHashVar(HashType hash_type)
++ {
++ 	SPITupleTable  *spi_tuptable = NULL;
++ 	TupleDesc		spi_tupdesc;
++ 	HeapTuple		spi_tuple;
++ 	int				ret;
++ 	int				proc;
++ 
++ 	if (hash_type == HASH_USER)
++ 	{
++ 		userKey		   *user_key = palloc(sizeof(userKey));
++ 		char		   *user_name = NULL;
++ 		char		   *ip = NULL;
++ 		char		   *profile = NULL;
++ 		int32			user_id = 0;
++ 
++ 		if (user_hash_initialized == TRUE)
++ 			return 0;
++ 
++ 		/* Connect to SPI manager */
++ 		if ((ret = SPI_connect()) < 0)
++ 			/* internal error */
++ 			elog(ERROR, "SPI_connect failed: %d", ret);
++ 
++ 		/* Retrieve the desired rows */
++ 		ret = SPI_execute("select user_id, user_name, ip, profile from user_dim", true, 0);
++ 		proc = SPI_processed;
++ 
++ 		/* Check for qualifying tuples */
++ 		if ((ret == SPI_OK_SELECT) && (proc > 0))
++ 		{
++ 			int		i;
++ 
++ 			spi_tuptable = SPI_tuptable;
++ 			spi_tupdesc = spi_tuptable->tupdesc;
++ 
++ 			for (i = 0; i < proc; ++i)
++ 			{
++ 				char	   *buf;
++ 
++ 				/* get the next sql result tuple */
++ 				spi_tuple = spi_tuptable->vals[i];
++ 
++ 				buf = SPI_getvalue(spi_tuple, spi_tupdesc, 1);
++ 				if (buf)
++ 					user_id = atoi(buf);
++ 				else
++ 					elog(ERROR, "NULL user_id found in user_dim table");
++ 				user_name = SPI_getvalue(spi_tuple, spi_tupdesc, 2);
++ 				ip = SPI_getvalue(spi_tuple, spi_tupdesc, 3);
++ 				profile = SPI_getvalue(spi_tuple, spi_tupdesc, 4);
++ 
++ 				if (!user_name || strlen(user_name) > MAX_USERNAME_LEN)
++ 					elog(ERROR, "Bad user name");
++ 
++ 				if (!ip || strlen(ip) > MAX_IPADDR_LEN)
++ 					elog(ERROR, "Bad IP Address");
++ 
++ 				if (!profile || strlen(profile) > MAX_PROFILE_LEN)
++ 					elog(ERROR, "Bad profile");
++ 
++ 				user_key->user_name = user_name;
++ 				user_key->ip = ip;
++ 				user_key->profile = profile;
++ 				addToHash(HASH_USER, user_key, user_id);
++ 			}
++ 
++ 			SPI_finish();
++ 
++ 			user_hash_initialized = TRUE;
++ 			return proc;
++ 		}
++ 		else if ((ret == SPI_OK_SELECT) && (proc == 0))
++ 		{
++ 			/* no qualifying tuples */
++ 			SPI_finish();
++ 			return 0;
++ 		}
++ 		else
++ 		{
++ 			/* error */
++ 			SPI_finish();
++ 			return -1;
++ 		}
++ 	}
++ 	else if (hash_type == HASH_HOST)
++ 	{
++ 		hostKey		   *host_key = palloc(sizeof(hostKey));
++ 		char		   *url_domain = NULL;
++ 		char		   *url_begin = NULL;
++ 		int32			host_id = 0;
++ 
++ 		if (host_hash_initialized == TRUE)
++ 			return 0;
++ 
++ 		/* Connect to SPI manager */
++ 		if ((ret = SPI_connect()) < 0)
++ 			/* internal error */
++ 			elog(ERROR, "SPI_connect failed: %d", ret);
++ 
++ 		/* Retrieve the desired rows */
++ 		ret = SPI_execute("select host_id, url_domain, url_begin from host_dim", true, 0);
++ 		proc = SPI_processed;
++ 
++ 		/* Check for qualifying tuples */
++ 		if ((ret == SPI_OK_SELECT) && (proc > 0))
++ 		{
++ 			int		i;
++ 
++ 			spi_tuptable = SPI_tuptable;
++ 			spi_tupdesc = spi_tuptable->tupdesc;
++ 
++ 			for (i = 0; i < proc; ++i)
++ 			{
++ 				char	   *buf;
++ 
++ 				/* get the next sql result tuple */
++ 				spi_tuple = spi_tuptable->vals[i];
++ 
++ 				buf = SPI_getvalue(spi_tuple, spi_tupdesc, 1);
++ 				if (buf)
++ 					host_id = atoi(buf);
++ 				else
++ 					elog(ERROR, "NULL host_id found in host_dim table");
++ 				url_domain = SPI_getvalue(spi_tuple, spi_tupdesc, 2);
++ 				url_begin = SPI_getvalue(spi_tuple, spi_tupdesc, 3);
++ 
++ 				if (!url_domain || strlen(url_domain) > MAX_DOMAIN_LEN)
++ 					elog(ERROR, "Bad domain");
++ 
++ 				if (!url_begin || strlen(url_begin) > MAX_HOST_LEN)
++ 					elog(ERROR, "Bad host");
++ 
++ 				host_key->url_domain = url_domain;
++ 				host_key->url_begin = url_begin;
++ 				addToHash(HASH_HOST, host_key, host_id);
++ 			}
++ 
++ 			SPI_finish();
++ 
++ 			host_hash_initialized = TRUE;
++ 			return proc;
++ 		}
++ 		else if ((ret == SPI_OK_SELECT) && (proc == 0))
++ 		{
++ 			/* no qualifying tuples */
++ 			SPI_finish();
++ 			return 0;
++ 		}
++ 		else
++ 		{
++ 			/* error */
++ 			SPI_finish();
++ 			return -1;
++ 		}
++ 	}
++ 	else if (hash_type == HASH_RATING)
++ 	{
++ 		ratingKey	   *rating_key = palloc(sizeof(ratingKey));
++ 		char		   *rating = NULL;
++ 		int32			rating_id = 0;
++ 
++ 		if (rating_hash_initialized == TRUE)
++ 			return 0;
++ 
++ 		/* Connect to SPI manager */
++ 		if ((ret = SPI_connect()) < 0)
++ 			/* internal error */
++ 			elog(ERROR, "SPI_connect failed: %d", ret);
++ 
++ 		/* Retrieve the desired rows */
++ 		ret = SPI_execute("select rating_id, rating from unique_ratings", true, 0);
++ 		proc = SPI_processed;
++ 
++ 		/* Check for qualifying tuples */
++ 		if ((ret == SPI_OK_SELECT) && (proc > 0))
++ 		{
++ 			int		i;
++ 
++ 			spi_tuptable = SPI_tuptable;
++ 			spi_tupdesc = spi_tuptable->tupdesc;
++ 
++ 			for (i = 0; i < proc; ++i)
++ 			{
++ 				char	   *buf;
++ 
++ 				/* get the next sql result tuple */
++ 				spi_tuple = spi_tuptable->vals[i];
++ 
++ 				buf = SPI_getvalue(spi_tuple, spi_tupdesc, 1);
++ 				if (buf)
++ 					rating_id = atoi(buf);
++ 				else
++ 					elog(ERROR, "NULL rating_id found in unique_ratings table");
++ 				rating = SPI_getvalue(spi_tuple, spi_tupdesc, 2);
++ 
++ 				if (!rating || strlen(rating) > MAX_RATING_LEN)
++ 					elog(ERROR, "Bad rating");
++ 
++ 				rating_key->rating = rating;
++ 				addToHash(HASH_RATING, rating_key, rating_id);
++ 			}
++ 
++ 			SPI_finish();
++ 
++ 			rating_hash_initialized = TRUE;
++ 			return proc;
++ 		}
++ 		else if ((ret == SPI_OK_SELECT) && (proc == 0))
++ 		{
++ 			/* no qualifying tuples */
++ 			SPI_finish();
++ 			return 0;
++ 		}
++ 		else
++ 		{
++ 			/* error */
++ 			SPI_finish();
++ 			return -1;
++ 		}
++ 	}
++ 	else if (hash_type == HASH_CATMAP)
++ 	{
++ 		catmapKey	   *catmap_key = palloc(sizeof(catmapKey));
++ 		int32			catmap_id = -1;
++ 		char		   *cat_long = NULL;
++ 		char		   *cat_short = NULL;
++ 
++ 		if (catmap_hash_initialized == TRUE)
++ 			return 0;
++ 
++ 		/* Connect to SPI manager */
++ 		if ((ret = SPI_connect()) < 0)
++ 			/* internal error */
++ 			elog(ERROR, "SPI_connect failed: %d", ret);
++ 
++ 		/* Retrieve the desired rows */
++ 		ret = SPI_execute("select id, long, short from cat_map", true, 0);
++ 		proc = SPI_processed;
++ 
++ 		/* Check for qualifying tuples */
++ 		if ((ret == SPI_OK_SELECT) && (proc > 0))
++ 		{
++ 			int		i;
++ 
++ 			spi_tuptable = SPI_tuptable;
++ 			spi_tupdesc = spi_tuptable->tupdesc;
++ 
++ 			for (i = 0; i < proc; ++i)
++ 			{
++ 				char	   *buf;
++ 
++ 				/* get the next sql result tuple */
++ 				spi_tuple = spi_tuptable->vals[i];
++ 
++ 				buf = SPI_getvalue(spi_tuple, spi_tupdesc, 1);
++ 				if (buf)
++ 					catmap_id = atoi(buf);
++ 				else
++ 					elog(ERROR, "NULL id found in cat_map table");
++ 				cat_long = SPI_getvalue(spi_tuple, spi_tupdesc, 2);
++ 				cat_short = SPI_getvalue(spi_tuple, spi_tupdesc, 3);
++ 
++ 				if (!cat_long)
++ 					elog(ERROR, "Bad category long name");
++ 
++ 				if (!cat_short)
++ 					elog(ERROR, "Bad category short name");
++ 
++ 				catmap_key->catmap_id = catmap_id;
++ 				catmap_key->cat_long = cat_long;
++ 				catmap_key->cat_short = cat_short;
++ 				addToHash(HASH_CATMAP, catmap_key, catmap_id);
++ 			}
++ 
++ 			SPI_finish();
++ 
++ 			catmap_hash_initialized = TRUE;
++ 			return proc;
++ 		}
++ 		else if ((ret == SPI_OK_SELECT) && (proc == 0))
++ 		{
++ 			/* no qualifying tuples */
++ 			SPI_finish();
++ 			return 0;
++ 		}
++ 		else
++ 		{
++ 			/* error */
++ 			SPI_finish();
++ 			return -1;
++ 		}
++ 	}
++ 	else
++ 		elog(ERROR, "unknown dimension requested");
++ 
++ 	return -1;
++ }
++ 
++ static int
++ getDimFromHash(HashType hash_type, void *raw_key)
++ {
++ 	char	   *p;
++ 
++ 	if (hash_type == HASH_USER)
++ 	{
++ 		userKey			   *user_key = (userKey *) raw_key;
++ 		char			   *user_name = user_key->user_name;
++ 		char			   *ip = user_key->ip;
++ 		char			   *profile = user_key->profile;
++ 		user_HashTableEnt  *hentry;
++ 		char				key[USER_HASH_LEN];
++ 
++ 
++ 		if (!user_HashTable)
++ 			user_HashTable = createHash(hash_type);
++ 
++ 		/* entire key is used for the hash - init it to '\0' bytes */
++ 		MemSet(key, 0, USER_HASH_LEN);
++ 		p = key;
++ 	
++ 		/* set the user name part of the key */
++ 		snprintf(p, MAX_USERNAME_LEN, "%s", user_name);
++ 		p += MAX_USERNAME_LEN;
++ 	
++ 		/* set the IP address part of the key */
++ 		snprintf(p, MAX_IPADDR_LEN, "%s", ip);
++ 		p += MAX_IPADDR_LEN;
++ 	
++ 		/* set the profile part of the key */
++ 		snprintf(p, MAX_PROFILE_LEN, "%s", profile);
++ 		hentry = (user_HashTableEnt *) hash_search(user_HashTable, key, HASH_FIND, NULL);
++ 	
++ 		if (hentry)
++ 			return (hentry->user_id);
++ 	}
++ 	else if (hash_type == HASH_HOST)
++ 	{
++ 		hostKey				   *host_key = (hostKey *) raw_key;
++ 		char				   *url_domain = host_key->url_domain;
++ 		char				   *url_begin = host_key->url_begin;
++ 		host_HashTableEnt	   *hentry;
++ 		uint8					key[HOST_HASH_LEN];
++ 		char					origin_key[MAX_DOMAIN_LEN+MAX_HOST_LEN]; 
++ 
++ 		if (!host_HashTable)
++ 			host_HashTable = createHash(hash_type);
++ 
++ 		/* entire key is used for the hash - init it to '\0' bytes */
++ 		MemSet(key, 0, HOST_HASH_LEN);
++ 		MemSet(origin_key, 0, MAX_DOMAIN_LEN+MAX_HOST_LEN);
++ 		p = origin_key;
++ 
++ 		/* set the domain part of the key */
++ 		snprintf(p, MAX_DOMAIN_LEN, "%s", url_domain);
++ 		p += MAX_DOMAIN_LEN;
++ 
++ 		/* set the host part of the key */
++ 		snprintf(p, MAX_HOST_LEN, "%s", url_begin);
++ 
++ 		pg_md5_hash_hex(origin_key, MAX_DOMAIN_LEN+MAX_HOST_LEN, key); /* XXX error handling */
++ 		hentry = (host_HashTableEnt *) hash_search(host_HashTable, key, HASH_FIND, NULL);
++ 
++ 		if (hentry)
++ 			return (hentry->host_id);
++ 	}
++ 	else if (hash_type == HASH_RATING)
++ 	{
++ 		ratingKey			   *rating_key = (ratingKey *) raw_key;
++ 		char				   *rating = rating_key->rating;
++ 		rating_HashTableEnt	   *hentry;
++ 		char					key[RATING_HASH_LEN];
++ 
++ 		if (!rating_HashTable)
++ 			rating_HashTable = createHash(hash_type);
++ 
++ 		/* entire key is used for the hash - init it to '\0' bytes */
++ 		MemSet(key, 0, RATING_HASH_LEN);
++ 		p = key;
++ 
++ 		/* set the rating part of the key */
++ 		snprintf(p, MAX_RATING_LEN, "%s", rating);
++ 
++ 		hentry = (rating_HashTableEnt *) hash_search(rating_HashTable, key, HASH_FIND, NULL);
++ 
++ 		if (hentry)
++ 			return (hentry->rating_id);
++ 	}
++ 	else
++ 		CLEANUP_AND_THROW_ERROR("unknown dimension requested");
++ 		
++ 	return -1;
++ }
++ 
++ static catmapKey *
++ getCatFromHash(HashType hash_type, int32 key)
++ {
++ 	if (hash_type == HASH_CATMAP)
++ 	{
++ 		catmap_HashTableEnt	   *hentry;
++ 		catmapKey			   *catmap_key = palloc(sizeof(catmapKey));
++ 
++ 		if (!catmap_HashTable)
++ 			catmap_HashTable = createHash(hash_type);
++ 
++ 		hentry = (catmap_HashTableEnt *) hash_search(catmap_HashTable, &key, HASH_FIND, NULL);
++ 	
++ 		if (hentry)
++ 		{
++ 			catmap_key->catmap_id = hentry->catmap_id;
++ 			catmap_key->cat_long = hentry->cat_long;
++ 			catmap_key->cat_short = hentry->cat_short;
++ 
++ 			return catmap_key;
++ 		}
++ 	}
++ 	else
++ 		CLEANUP_AND_THROW_ERROR("wrong hash type requested");
++ 		
++ 	return NULL;
++ }
++ 
++ static void
++ addToHash(HashType hash_type, void *raw_key, int id)
++ {
++ 	bool		found;
++ 	char	   *p;
++ 
++ 	if (hash_type == HASH_USER)
++ 	{
++ 		userKey			   *user_key = (userKey *) raw_key;
++ 		char			   *user_name = user_key->user_name;
++ 		char			   *ip = user_key->ip;
++ 		char			   *profile = user_key->profile;
++ 		int					user_id = id;
++ 		user_HashTableEnt  *hentry;
++ 		char				key[USER_HASH_LEN];
++ 
++ 		if (!user_HashTable)
++ 			user_HashTable = createHash(hash_type);
++ 
++ 		/* entire key is used for the hash - init it to '\0' bytes */
++ 		MemSet(key, 0, USER_HASH_LEN);
++ 		p = key;
++ 
++ 		/* set the user name part of the key */
++ 		snprintf(p, MAX_USERNAME_LEN, "%s", user_name);
++ 		p += MAX_USERNAME_LEN;
++ 
++ 		/* set the IP address part of the key */
++ 		snprintf(p, MAX_IPADDR_LEN, "%s", ip);
++ 		p += MAX_IPADDR_LEN;
++ 
++ 		/* set the profile part of the key */
++ 		snprintf(p, MAX_PROFILE_LEN, "%s", profile);
++ 
++ 		hentry = (user_HashTableEnt *) hash_search(user_HashTable, key, HASH_ENTER, &found);
++ 
++ 		if (!hentry)
++ 			ereport(ERROR,
++ 					(errcode(ERRCODE_OUT_OF_MEMORY),
++ 					 errmsg("out of memory")));
++ 
++ 		memcpy(hentry->key, key, USER_HASH_LEN);
++ 		hentry->user_id = user_id;
++ 	}
++ 	else if (hash_type == HASH_HOST)
++ 	{
++ 		hostKey				   *host_key = (hostKey *) raw_key;
++ 		char				   *url_domain = host_key->url_domain;
++ 		char				   *url_begin = host_key->url_begin;
++ 		int						host_id = id;
++ 		host_HashTableEnt	   *hentry;
++ 		uint8					key[HOST_HASH_LEN];
++ 		char					origin_key[MAX_DOMAIN_LEN +MAX_HOST_LEN];
++ 
++ 		if (!host_HashTable)
++ 			host_HashTable = createHash(hash_type);
++ 
++ 		/* entire key is used for the hash - init it to '\0' bytes */
++ 		MemSet(key, 0, HOST_HASH_LEN);
++ 		MemSet(origin_key, 0, MAX_DOMAIN_LEN +MAX_HOST_LEN);
++ 		p = origin_key;
++ 
++ 		/* set the domain part of the key */
++ 		snprintf(p, MAX_DOMAIN_LEN, "%s", url_domain);
++ 		p += MAX_DOMAIN_LEN;
++ 
++ 		/* set the host part of the key */
++ 		snprintf(p, MAX_HOST_LEN, "%s", url_begin);
++ 
++ 		pg_md5_hash_hex(origin_key, MAX_DOMAIN_LEN+MAX_HOST_LEN, key); /* XXX error handling */
++ 		hentry = (host_HashTableEnt *) hash_search(host_HashTable, key, HASH_ENTER, &found);
++ 
++ 		if (!hentry)
++ 			ereport(ERROR,
++ 					(errcode(ERRCODE_OUT_OF_MEMORY),
++ 					 errmsg("out of memory")));
++ 
++ 		memcpy(hentry->key, key, HOST_HASH_LEN);
++ 		hentry->host_id = host_id;
++ 	}
++ 	else if (hash_type == HASH_RATING)
++ 	{
++ 		ratingKey			   *rating_key = (ratingKey *) raw_key;
++ 		char				   *rating = rating_key->rating;
++ 		int						rating_id = id;
++ 		rating_HashTableEnt	   *hentry;
++ 		char					key[RATING_HASH_LEN];
++ 
++ 		if (!rating_HashTable)
++ 			rating_HashTable = createHash(hash_type);
++ 
++ 		/* entire key is used for the hash - init it to '\0' bytes */
++ 		MemSet(key, 0, RATING_HASH_LEN);
++ 		p = key;
++ 
++ 		/* set the rating part of the key */
++ 		snprintf(p, MAX_RATING_LEN, "%s", rating);
++ 
++ 		hentry = (rating_HashTableEnt *) hash_search(rating_HashTable, key, HASH_ENTER, &found);
++ 
++ 		if (!hentry)
++ 			ereport(ERROR,
++ 					(errcode(ERRCODE_OUT_OF_MEMORY),
++ 					 errmsg("out of memory")));
++ 
++ 		memcpy(hentry->key, key, RATING_HASH_LEN);
++ 		hentry->rating_id = rating_id;
++ 	}
++ 	else if (hash_type == HASH_CATMAP)
++ 	{
++ 		catmapKey			   *catmap_key = (catmapKey *) raw_key;
++ 		int32					catmap_id = id;
++ 		char				   *cat_long = catmap_key->cat_long;
++ 		char				   *cat_short = catmap_key->cat_short;
++ 		catmap_HashTableEnt	   *hentry;
++ 
++ 		if (!catmap_HashTable)
++ 			catmap_HashTable = createHash(hash_type);
++ 
++ 		hentry = (catmap_HashTableEnt *) hash_search(catmap_HashTable, (void *) &catmap_id, HASH_ENTER, &found);
++ 
++ 		if (!hentry)
++ 			ereport(ERROR,
++ 					(errcode(ERRCODE_OUT_OF_MEMORY),
++ 					 errmsg("out of memory")));
++ 
++ 		hentry->catmap_id = catmap_id;
++ 		hentry->cat_long = strdup(cat_long);
++ 		hentry->cat_short = strdup(cat_short);
++ 	}
++ 	else
++ 		CLEANUP_AND_THROW_ERROR("unknown dimension requested");
++ }
++ 
++ static HTAB *
++ createHash(HashType hash_type)
++ {
++ 	HASHCTL		ctl;
++ 	HTAB	   *ptr = NULL;
++ 
++ 	if (hash_type == HASH_USER)
++ 	{
++ 		ctl.keysize = USER_HASH_LEN;
++ 		ctl.entrysize = sizeof(user_HashTableEnt);
++ 		ctl.hash = tag_hash;
++ 
++ 		ptr = hash_create("user hash", NUM_USER_HASH_ENT, &ctl, HASH_ELEM | HASH_FUNCTION);
++ 	}
++ 	else if (hash_type == HASH_HOST)
++ 	{
++ 		ctl.keysize = HOST_HASH_LEN;
++ 		ctl.entrysize = sizeof(host_HashTableEnt);
++ 		ctl.hash = tag_hash;
++ 
++ 		ptr = hash_create("host hash", NUM_HOST_HASH_ENT, &ctl, HASH_ELEM | HASH_FUNCTION);
++ 	}
++ 	else if (hash_type == HASH_RATING)
++ 	{
++ 		ctl.keysize = RATING_HASH_LEN;
++ 		ctl.entrysize = sizeof(rating_HashTableEnt);
++ 		ctl.hash = tag_hash;
++ 
++ 		ptr = hash_create("rating hash", NUM_RATING_HASH_ENT, &ctl, HASH_ELEM | HASH_FUNCTION);
++ 	}
++ 	else if (hash_type == HASH_CATMAP)
++ 	{
++ 		ctl.keysize = sizeof(int32);
++ 		ctl.entrysize = sizeof(catmap_HashTableEnt);
++ 		ctl.hash = tag_hash;
++ 
++ 		ptr = hash_create("catmap hash", NUM_CATMAP_HASH_ENT, &ctl, HASH_ELEM | HASH_FUNCTION);
++ 	}
++ 	else
++ 		CLEANUP_AND_THROW_ERROR("unknown dimension requested");
++ 
++ 	if (!ptr)
++ 		ereport(ERROR,
++ 				(errcode(ERRCODE_OUT_OF_MEMORY),
++ 				 errmsg("out of memory")));
++ 
++ 	return (ptr);
++ }
++ 
++ static PGconn *
++ dbConnect(char *connstr)
++ {
++ 	char	   *msg;
++ 	MemoryContext oldcontext;
++ 	PGconn	   *conn = NULL;
++ 
++ 	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
++ 
++ 	conn = PQconnectdb(connstr);
++ 
++ 	MemoryContextSwitchTo(oldcontext);
++ 
++ 	if (PQstatus(conn) == CONNECTION_BAD)
++ 	{
++ 		msg = pstrdup(PQerrorMessage(conn));
++ 		PQfinish(conn);
++ 
++ 		ereport(ERROR,
++ 				(errcode(ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION),
++ 				 errmsg("could not establish connection"),
++ 				 errdetail("%s", msg)));
++ 	}
++ 
++ 	return conn;
++ }
++ 
++ static char *
++ escape_backslash(char *rawstr)
++ {
++ 	text   *from_pattern =DatumGetTextP(DirectFunctionCall1(textin, CStringGetDatum("\\")));
++ 	text   *to_pattern =DatumGetTextP(DirectFunctionCall1(textin, CStringGetDatum("\\\\")));
++ 	text	   *rawstr_text;
++ 	text	   *result_text;
++ 	char	   *result;
++ 
++ 	rawstr_text = DatumGetTextP(DirectFunctionCall1(textin, CStringGetDatum(rawstr)));
++ 	result_text = DatumGetTextP(DirectFunctionCall3(replace_text, PointerGetDatum(rawstr_text), PointerGetDatum(from_pattern), PointerGetDatum(to_pattern)));
++ 	result = DatumGetCString(DirectFunctionCall1(textout, PointerGetDatum(result_text)));
++ 	return result;
++ }
++ 
++ static int
++ getCurrentTgt(copyTgts *copy_tgts, time_t raw_time, int record_type, char *connstr)
++ {
++ 	char			tablename[NAMEDATALEN];
++ 	int				i;
++ 	time_t			raw_time_p1;
++ 	int				current_tgt = -1;
++ 	bool			tgt_exists = FALSE;
++ 	PGresult	   *res = NULL;
++ 	char			tbltmp[128];
++ 
++ 	/*
++ 	 * Convert timestamp to a form more convenient for calculating partition table name.
++ 	 */
++ 	snprintf(tbltmp, sizeof(tbltmp), "%s", getPartitionStr(time_t_to_timestamp(raw_time), TRUE, FALSE));
++ 	if (record_type == 0)
++ 	{
++ 		/* web traffic */
++ 		snprintf(tablename, NAMEDATALEN, "%s_%s", COPY_TGT_WEB, tbltmp);
++ 	}
++ 	else if (record_type == 1)
++ 	{
++ 		/* im_p2p traffic */
++ 		snprintf(tablename, NAMEDATALEN, "%s_%s", COPY_TGT_IMP2P, tbltmp);
++ 	}
++ 	else
++ 		CLEANUP_AND_THROW_ERROR("Bad record type");
++ 
++ 	/* lookup and if needed add to COPY targets struct */
++ 	if (copy_tgts)
++ 	{
++ 		for (i = 0; i < copy_tgts->numtgts; ++i)
++ 		{
++ 			if (strncmp(copy_tgts->tgt[i].tablename, tablename, NAMEDATALEN) == 0)
++ 			{
++ 				/* If we found the table in the array, it must already exist too */
++ 				current_tgt = i;
++ 				return current_tgt;
++ 			}
++ 		}
++ 	
++ 		/* new target is needed */
++ 		if (current_tgt == -1)
++ 		{
++ 			char			tmp[128];
++ 			char			tmp_p1[128];
++ 
++ 			/*
++ 			 * Convert timestamp to a form more convenient for calculating partition constraint.
++ 			 * Also need tomorrow, which could be different month or even different year
++ 			 */
++ 			snprintf(tmp, sizeof(tmp), "%s", getPartitionStr(time_t_to_timestamp(raw_time), FALSE, TRUE));
++ 			raw_time_p1 = raw_time + (24 * 60 * 60);
++ 			snprintf(tmp_p1, sizeof(tmp_p1), "%s", getPartitionStr(time_t_to_timestamp(raw_time_p1), FALSE, TRUE));
++ 
++ 			/* make space */
++ 			copy_tgts->numtgts += 1;
++ 			current_tgt = copy_tgts->numtgts - 1;
++ 
++ 			if (copy_tgts->tgt)
++ 				copy_tgts->tgt = repalloc(copy_tgts->tgt, copy_tgts->numtgts * sizeof(oneCopyTgt));
++ 			else
++ 				copy_tgts->tgt = palloc(sizeof(oneCopyTgt));
++ 	
++ 			/* add the tgt */
++ 			copy_tgts->tgt[current_tgt].tgt_type = record_type;
++ 			copy_tgts->tgt[current_tgt].start_time = pstrdup(tmp);
++ 			copy_tgts->tgt[current_tgt].end_time = pstrdup(tmp_p1);
++ 			copy_tgts->tgt[current_tgt].tablename = pstrdup(tablename);
++ 			copy_tgts->tgt[current_tgt].is_new = FALSE;
++ 			copy_tgts->tgt[current_tgt].copystr = makeStringInfo();
++ 		}
++ 	}
++ 	else
++ 		CLEANUP_AND_THROW_ERROR("COPY targets array uninitialized");
++ 
++ 	/*
++ 	 * create the table if needed
++ 	 * use the outer COPY loop
++ 	 */
++ 
++ 	/* first step -- see if any table with our tgt's name exists */
++ 	tgt_exists = checkPartitionExists(tablename);
++ 
++ 	/* if we didn't find the tgt table, create it */
++ 	if (!tgt_exists)
++ 	{
++ 		char			tmp[128];
++ 		char			tmp_p1[128];
++ 		PGconn		   *conn_part;
++ 		StringInfo		sql = makeStringInfo();
++ 		/*
++ 		* Convert timestamp to a form more convenient for calculating partition constraint.
++ 		* Also need tomorrow, which could be different month or even different year
++ 		*/
++ 		snprintf(tmp, sizeof(tmp), "%s", getPartitionStr(time_t_to_timestamp(raw_time), FALSE, TRUE));
++ 		raw_time_p1 = raw_time + (24 * 60 * 60);
++ 		snprintf(tmp_p1, sizeof(tmp_p1), "%s", getPartitionStr(time_t_to_timestamp(raw_time_p1), FALSE, TRUE));
++ 
++ 		if (record_type == 0)
++ 		{
++ 			/* web traffic */
++ 			appendStringInfo(sql, "CREATE TABLE %s (CHECK (time >= '%s' and time < '%s')) INHERITS (%s_base)",
++ 									tablename, tmp, tmp_p1, COPY_TGT_WEB);
++ 		}
++ 		else if (record_type == 1)
++ 		{
++ 			/* imp2p traffic */
++ 			appendStringInfo(sql, "CREATE TABLE %s (CHECK (time >= '%s' and time < '%s')) INHERITS (%s_base)",
++ 									tablename, tmp, tmp_p1, COPY_TGT_IMP2P);
++ 		}
++ 
++ 		/*
++ 		 * create a separate connection for this transaction
++ 		 *
++ 		 * this is done to minimize the time we might block a parallel
++ 		 * loader trying to do the same thing
++ 		 */
++ 		conn_part = dbConnect(connstr);
++ 
++ 		/* start a transaction */
++ 		res = PQexec(conn_part, "BEGIN");
++ 		if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++ 			EVENT_RES_ERROR(conn_part, "failed to start transaction for partition creation");
++ 		PQclear(res);
++ 
++ 		/* create the partition table */
++ 		elog(DEBUG1, "creating partition table: %s", sql->data);
++ 		res = PQexec(conn_part, sql->data);
++ 		if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++ 		{
++ 			/*
++ 			 * we need to retry finding the partition if creation fails,
++ 			 * because some other loader might have beaten us to it, but
++ 			 * first save the error message in case we need it
++ 			 */
++ 			char	   *emsg = pstrdup(PQerrorMessage(conn_part));
++ 
++ 			/* regardless of the outcome, we need to clean up the open connection */
++ 			PQfinish(conn_part);
++ 
++ 			/* re-check for the partition */
++ 			tgt_exists = checkPartitionExists(tablename);
++ 
++ 			/* if it still doesn't exist, something else must have gone wrong */
++ 			if (!tgt_exists)
++ 				elog(ERROR, "failed to create partition table: %s: %s", tablename, emsg);
++ 		}
++ 		else
++ 		{
++ 			/* partition creation was successful */
++ 			PQclear(res);
++ 
++ 			/* mark it as new */
++ 			copy_tgts->tgt[current_tgt].is_new = TRUE;
++ 
++ 			/* record it in partition_table_status table */
++ 			pfree(sql->data);
++ 			initStringInfo(sql);
++ 			appendStringInfo(sql,
++ 							"insert into partition_table_status (table_name,start_time,end_time,count,type,status) "
++ 							"values (%s,%s,%s,%s,%d,%s)",
++ 									quote_literal_cstr(copy_tgts->tgt[current_tgt].tablename),
++ 									quote_literal_cstr(copy_tgts->tgt[current_tgt].start_time),
++ 									quote_literal_cstr(copy_tgts->tgt[current_tgt].end_time),
++ 									"NULL",
++ 									copy_tgts->tgt[current_tgt].tgt_type,
++ 									"'N'");
++ 			elog(DEBUG1, "INSERT partition_table_status: %s", sql->data);
++ 			res = PQexec(conn_part, sql->data);
++ 			if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++ 			{
++ 				char	   *emsg = pstrdup(PQerrorMessage(conn_part));
++ 
++ 				elog(NOTICE, "First try: failed to record partition table in partition_table_status: %s: %s", tablename, emsg);
++ 
++ 				/* re-check if some other process has inserted this row */
++ 				pfree(sql->data);
++ 				initStringInfo(sql);
++ 				appendStringInfo(sql, "select * from partition_table_status where table_name='%s'", tablename);
++ 				res = PQexec(conn_part, sql->data);
++ 		                if (!res || (PQresultStatus(res) != PGRES_TUPLES_OK) || PQntuples(res) != 1) 
++                 		{
++                         		elog(DEBUG1, "%s", sql->data);
++                         		EVENT_RES_ERROR(conn_part, "Failed to record partition table in partition_table_status");
++                 		}
++ 			}
++ 			PQclear(res);
++ 
++ 			/* commit the transaction */
++ 			res = PQexec(conn_part, "COMMIT");
++ 			if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++ 				EVENT_RES_ERROR(conn_part, "failed to commit transaction for partition creation");
++ 			PQclear(res);
++ 
++ 			/* disconnect */
++ 			PQfinish(conn_part);
++ 		}
++ 	}
++ 	else
++ 		elog(DEBUG1, "found partition table: %s", tablename);
++ 
++ 	return current_tgt;
++ }
++ 
++ /*
++  * get name of current database and user
++  * will be used for the connection string passed to libpq
++  */
++ static void
++ getConnStr(StringInfo connstr, int port)
++ {
++ 	int		ret;
++ 	int		proc;
++ 
++ 	if ((ret = SPI_connect()) < 0)
++ 		/* internal error */
++ 		elog(ERROR, "SPI_connect failed: %d", ret);
++ 
++ 	/* Retrieve the desired rows */
++ 	ret = SPI_execute("select current_database(), current_user", true, 0);
++ 	proc = SPI_processed;
++ 
++ 	if ((ret == SPI_OK_SELECT) && (proc == 1))
++ 	{
++ 		SPITupleTable  *spi_tuptable = SPI_tuptable;
++ 		TupleDesc		spi_tupdesc = spi_tuptable->tupdesc;
++ 		HeapTuple		spi_tuple = spi_tuptable->vals[0];
++ 		char		   *current_db = SPI_getvalue(spi_tuple, spi_tupdesc, 1);
++ 		char		   *current_user = SPI_getvalue(spi_tuple, spi_tupdesc, 2);
++ 
++ 		appendStringInfo(connstr, "port=%d dbname=%s user=%s", port, current_db, current_user);
++ 		SPI_finish();
++ 	}
++ 	else
++ 	{
++ 		/* error */
++ 		SPI_finish();
++ 		elog(ERROR, "failed to get current database name");
++ 	}
++ 
++ }
++ 
++ 
++ /*
++  * get id of current iprism_info record based on serial number
++  */
++ static int
++ getiPrismId(int sn, int *tzoffset)
++ {
++ 	StringInfo		sql = makeStringInfo();
++ 	int				ret;
++ 	int				proc;
++ 	int				iprism_id = 0;
++ 
++ 	if ((ret = SPI_connect()) < 0)
++ 		/* internal error */
++ 		elog(ERROR, "SPI_connect failed: %d", ret);
++ 
++ 	appendStringInfo(sql, "select iprism_id, timezone from iprism_info where serial_no = %d and is_current order by 1 desc limit 1", sn);
++ 
++ 	/* Retrieve the desired rows */
++ 	ret = SPI_execute(sql->data, true, 0);
++ 	proc = SPI_processed;
++ 
++ 	if ((ret == SPI_OK_SELECT) && (proc == 1))
++ 	{
++ 		SPITupleTable  *spi_tuptable = SPI_tuptable;
++ 		TupleDesc		spi_tupdesc = spi_tuptable->tupdesc;
++ 		HeapTuple		spi_tuple = spi_tuptable->vals[0];
++ 		char		   *buf_id = SPI_getvalue(spi_tuple, spi_tupdesc, 1);
++ 		char		   *buf_tz = SPI_getvalue(spi_tuple, spi_tupdesc, 2);
++ 
++ 		if (buf_id)
++ 			iprism_id = atoi(buf_id);
++ 		else
++ 		{
++ 			SPI_finish();
++ 			elog(ERROR, "failed to get current iPrism id");
++ 		}
++ 
++ 		if (buf_tz)
++ 			*tzoffset = atoi(buf_tz);
++ 		else
++ 		{
++ 			SPI_finish();
++ 			elog(ERROR, "failed to get current iPrism id");
++ 		}
++ 
++ 		SPI_finish();
++ 	}
++ 	else
++ 	{
++ 		/* error */
++ 		SPI_finish();
++ 		elog(ERROR, "failed to get current iPrism id");
++ 	}
++ 
++ 	return iprism_id;
++ }
++ 
++ static void
++ doCopy(copyTgts *copy_tgts)
++ {
++ 	StringInfo		sql_start = makeStringInfo();
++ 	int				ret;
++ 	int				i;
++ 	int				current_tgt;
++ 	PGresult	   *res = NULL;
++ 
++ 	for (i = 0; i < copy_tgts->numtgts; ++i)
++ 	{
++ 		current_tgt = i;
++ 
++ 		if (copy_tgts->tgt[current_tgt].tgt_type == TGT_WEB)
++ 			appendStringInfo(sql_start,
++ 							"COPY %s (time, iprism_id, user_id, host_id, rating_id, bandwidth, "
++ 							"duration, action, url_protocol, mime_type, url_path, "
++ 							"url_info) FROM stdin", copy_tgts->tgt[current_tgt].tablename);
++ 		else if (copy_tgts->tgt[current_tgt].tgt_type == TGT_IMP2P)
++ 			appendStringInfo(sql_start,
++ 							"COPY %s (time, iprism_id, user_id, "
++ 							"protocol, action, application) "
++ 							"FROM stdin", copy_tgts->tgt[current_tgt].tablename);
++ 		else
++ 			EVENT_RES_ERROR(conn_copy, "unknown record type");
++ 
++ 
++ 		/* do COPY */
++ 		elog(DEBUG1, "%s", sql_start->data);
++ 		res = PQexec(conn_copy, sql_start->data);
++ 		if (!res || (PQresultStatus(res) != PGRES_COPY_IN))
++ 			EVENT_RES_ERROR(conn_copy, "failed to start COPY");
++ 		PQclear(res);
++ 	
++ 		elog(DEBUG1, "%s", copy_tgts->tgt[current_tgt].copystr->data);
++ 		ret = PQputCopyData(conn_copy,
++ 							copy_tgts->tgt[current_tgt].copystr->data,
++ 							strlen(copy_tgts->tgt[current_tgt].copystr->data));
++ 		if (ret < 0)
++ 			EVENT_RES_ERROR(conn_copy, "failed to tranfer COPY buffer");
++ 	
++ 		ret = PQputCopyEnd(conn_copy, NULL);
++ 		if (ret < 0)
++ 			EVENT_RES_ERROR(conn_copy, "failed to complete COPY");
++ 	
++ 		res = PQgetResult(conn_copy);
++ 		if (PQresultStatus(res) != PGRES_COMMAND_OK)
++ 			EVENT_RES_ERROR(conn_copy, "failed to restore communications after COPY");
++ 		PQclear(res);
++ 	
++ 		/* flush the COPY data buffer */
++ 		pfree(copy_tgts->tgt[current_tgt].copystr->data);
++ 		initStringInfo(copy_tgts->tgt[current_tgt].copystr);
++ 
++ 		/* flush the COPY start buffer */
++ 		pfree(sql_start->data);
++ 		initStringInfo(sql_start);
++ 	}
++ }
++ 
++ /*
++  * lookup dimension - add them to the dim table and in memory hash table
++  * if they are not already there
++  */
++ static int
++ getDim(HashType hash_type, void *raw_key)
++ {
++ 	int				id = -1;	/* XXX not all types are using hash */
++ 	PGresult	   *res = NULL;
++ 
++ 	if (hash_type == HASH_USER)
++ 	{
++ 		userKey			   *user_key = (userKey *) raw_key;
++ 		char			   *user_name = user_key->user_name;
++ 		char			   *ip = user_key->ip;
++ 		char			   *profile = user_key->profile;
++ 		int					user_id = id = getDimFromHash(hash_type, raw_key);
++ 
++ 		/* if user not found, check db */
++ 		if (user_id < 0)
++ 		{
++ 			StringInfo		user_sql_select = makeStringInfo();
++ 	
++ 			res = PQexec(conn_dim, "BEGIN; LOCK TABLE user_dim IN EXCLUSIVE MODE");
++ 			if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++ 				EVENT_RES_ERROR(conn_dim, "failed to LOCK user_dim table");
++ 			PQclear(res);
++ 	
++ 			appendStringInfo(user_sql_select, "select user_id from user_dim where "
++ 								"user_name = %s and profile = %s and ip = %s",
++ 								quote_literal_cstr(user_name),
++ 								quote_literal_cstr(profile),
++ 								quote_literal_cstr(ip));
++ 			res = PQexec(conn_dim, user_sql_select->data);
++ 			if (!res || (PQresultStatus(res) != PGRES_TUPLES_OK))
++ 				EVENT_RES_ERROR(conn_dim, "failed to query user_dim table");
++ 	
++ 			if (PQntuples(res) == 1)
++ 			{
++ 				if (!PQgetisnull(res, 0, 0))
++ 					user_id = atoi(PQgetvalue(res, 0, 0));
++ 				else
++ 					EVENT_RES_ERROR(conn_dim, "found NULL user_id in user_dim table");
++ 	
++ 				PQclear(res);
++ 			}
++ 			else if (PQntuples(res) == 0)
++ 			{
++ 				StringInfo		user_sql_insert = makeStringInfo();
++ 				/*
++ 				 * if user still not found, lock table, INSERT, get new id.
++ 				 * add to hash table
++ 				 */
++ 				PQclear(res);
++ 	
++ 				appendStringInfo(user_sql_insert,
++ 									"insert into user_dim (user_name, profile, ip) "
++ 									"values (%s,%s,%s)",
++ 									quote_literal_cstr(user_name),
++ 									quote_literal_cstr(profile),
++ 									quote_literal_cstr(ip));
++ 				elog(DEBUG1, "INSERT user: %s", user_sql_insert->data);
++ 				res = PQexec(conn_dim, user_sql_insert->data);
++ 				if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++ 					EVENT_RES_ERROR(conn_dim, "failed to insert into user_dim table");
++ 				PQclear(res);
++ 	
++ 				res = PQexec(conn_dim, user_sql_select->data);
++ 				if (!res || (PQresultStatus(res) != PGRES_TUPLES_OK))
++ 					EVENT_RES_ERROR(conn_dim, "failed to query user_dim table");
++ 	
++ 				if (PQntuples(res) == 1)
++ 				{
++ 					if (!PQgetisnull(res, 0, 0))
++ 						user_id = atoi(PQgetvalue(res, 0, 0));
++ 					else
++ 						EVENT_RES_ERROR(conn_dim, "found NULL user_id in user_dim table");
++ 				}
++ 				else
++ 					EVENT_RES_ERROR(conn_dim, "failed to insert into user_dim table");
++ 	
++ 				PQclear(res);
++ 			}
++ 			else
++ 			{
++ 				/* something strange has gone wrong */
++ 				EVENT_RES_ERROR(conn_dim, "duplicate unique key found in user_dim table");
++ 			}
++ 	
++ 			/* COMMIT/release the table LOCK */
++ 			res = PQexec(conn_dim, "COMMIT");
++ 			if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++ 				EVENT_RES_ERROR(conn_dim, "failed to COMMIT/UNLOCK user_dim table");
++ 			PQclear(res);
++ 	
++ 			/* add record to the hash table */
++ 			user_key->user_name = user_name;
++ 			user_key->ip = ip;
++ 			user_key->profile = profile;
++ 			addToHash(HASH_USER, user_key, user_id);
++ 			user_id = getDimFromHash(HASH_USER, user_key);
++ 	
++ 			/* if user not found, punt */
++ 			if (user_id < 0)
++ 				EVENT_RES_ERROR(conn_dim, "failed to add to user_dim hash table");
++ 		}
++ 	
++ 		return user_id;
++ 	}
++ 	else if (hash_type == HASH_HOST)
++ 	{
++ 		hostKey				   *host_key = (hostKey *) raw_key;
++ 		char				   *url_domain = host_key->url_domain;
++ 		char				   *url_begin = host_key->url_begin;
++ 		int						host_id = id = getDimFromHash(hash_type, raw_key);
++ 
++ 		/* if host not found, check db */
++ 		if (host_id < 0)
++ 		{
++ 			StringInfo		host_sql_select = makeStringInfo();
++ /*
++ XXX don't need to lock it; try following:
++   select;
++   if not ok, insert;
++   select again;
++   if still not ok, abort
++ 
++ 			res = PQexec(conn_dim, "BEGIN; LOCK TABLE host_dim IN EXCLUSIVE MODE");
++ 			if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++ 				EVENT_RES_ERROR(conn_dim, "failed to LOCK host_dim table");
++ 			PQclear(res);
++ */
++ 			appendStringInfo(host_sql_select, "select host_id from host_dim where "
++ 							"url_domain = %s and url_begin = %s",
++ 							quote_literal_cstr(url_domain),
++ 							quote_literal_cstr(url_begin));
++ 			res = PQexec(conn_dim, host_sql_select->data);
++ 			if (!res || (PQresultStatus(res) != PGRES_TUPLES_OK))
++ 				EVENT_RES_ERROR(conn_dim, "failed to query host_ratings table");
++ 
++ 			if (PQntuples(res) == 1)
++ 			{
++ 				if (!PQgetisnull(res, 0, 0))
++ 					host_id = atoi(PQgetvalue(res, 0, 0));
++ 				else
++ 					EVENT_RES_ERROR(conn_dim, "found NULL host_id in host_dim table");
++ 
++ 				PQclear(res);
++ 			}
++ 			else if (PQntuples(res) == 0)
++ 			{
++ 				StringInfo		host_sql_insert = makeStringInfo();
++ 				/*
++ 				* if host still not found, lock table, INSERT, get new id.
++ 				* add to hash table
++ 				*/
++ 				PQclear(res);
++ 
++ 				appendStringInfo(host_sql_insert,
++ 								"insert into host_dim (url_domain, url_begin) "
++ 								"values (%s,%s)",
++ 								quote_literal_cstr(url_domain),
++ 								quote_literal_cstr(url_begin));
++ 				elog(DEBUG1, "INSERT host: %s", host_sql_insert->data);
++ 				res = PQexec(conn_dim, host_sql_insert->data);
++ /* XXX it is possible that insert will fail because another loader may insert the same entry in parallel
++   and triggers duplicated unique key error
++ 				if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++ 					EVENT_RES_ERROR(conn_dim, "failed to insert into host_dim table");
++ */
++ 				PQclear(res);
++ 
++ 				res = PQexec(conn_dim, host_sql_select->data);
++ 				if (!res || (PQresultStatus(res) != PGRES_TUPLES_OK))
++ 					EVENT_RES_ERROR(conn_dim, "failed to query host_dim table");
++ 
++ 				if (PQntuples(res) == 1)
++ 				{
++ 					if (!PQgetisnull(res, 0, 0))
++ 						host_id = atoi(PQgetvalue(res, 0, 0));
++ 					else
++ 						EVENT_RES_ERROR(conn_dim, "found NULL host_id in host_dim table");
++ 				}
++ 				else
++ 					EVENT_RES_ERROR(conn_dim, "failed to insert into host_dim table");
++ 
++ 				PQclear(res);
++ 			}
++ 			else
++ 			{
++ 				/* something strange has gone wrong */
++ 				EVENT_RES_ERROR(conn_dim, "duplicate unique key found in host_dim table");
++ 			}
++ /* XXX  no longer needed -- COMMIT/release the table LOCK
++ 			res = PQexec(conn_dim, "COMMIT");
++ 			if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++ 				EVENT_RES_ERROR(conn_dim, "failed to COMMIT/UNLOCK host_dim table");
++ 			PQclear(res);
++ */
++ 			/* add record to the hash table */
++ 			host_key->url_domain = url_domain;
++ 			host_key->url_begin = url_begin;
++ 			addToHash(HASH_HOST, host_key, host_id);
++ 			host_id = getDimFromHash(HASH_HOST, host_key);
++ 			/* if host not found, punt */
++ 			if (host_id < 0)
++ 				EVENT_RES_ERROR(conn_dim, "failed to add to host hash table");
++ 		}
++ 		return host_id;
++ 	}
++ 	else if (hash_type == HASH_RATING)
++ 	{
++ 		ratingKey			   *rating_key = (ratingKey *) raw_key;
++ 		char				   *rating = rating_key->rating;
++ 		int						rating_id = id = getDimFromHash(hash_type, raw_key);
++ 
++ 		/* if rating not found, check db */
++ 		if (rating_id < 0)
++ 		{
++ 			StringInfo		rating_sql_select = makeStringInfo();
++ 
++ 			res = PQexec(conn_dim, "BEGIN; LOCK TABLE unique_ratings IN EXCLUSIVE MODE");
++ 			if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++ 				EVENT_RES_ERROR(conn_dim, "failed to LOCK unique_ratings table");
++ 			PQclear(res);
++ 
++ 			appendStringInfo(rating_sql_select, "select rating_id from unique_ratings where "
++ 							 "rating = '%s'", rating);
++ 			res = PQexec(conn_dim, rating_sql_select->data);
++ 			if (!res || (PQresultStatus(res) != PGRES_TUPLES_OK))
++ 				EVENT_RES_ERROR(conn_dim, "failed to query unique_ratings table");
++ 
++ 			if (PQntuples(res) == 1)
++ 			{
++ 				if (!PQgetisnull(res, 0, 0))
++ 					rating_id = atoi(PQgetvalue(res, 0, 0));
++ 				else
++ 					EVENT_RES_ERROR(conn_dim, "found NULL rating_id in unique_ratings table");
++ 
++ 				PQclear(res);
++ 			}
++ 			else if (PQntuples(res) == 0)
++ 			{
++ 				StringInfo		rating_sql_insert = makeStringInfo();
++ 				/*
++ 				 * if rating still not found, lock table, INSERT, get new id.
++ 				 * add to hash table
++ 				 */
++ 				PQclear(res);
++ 
++ 				appendStringInfo(rating_sql_insert,
++ 								 "insert into unique_ratings (rating) "
++ 								 "values ('%s')", rating);
++ 				elog(DEBUG1, "INSERT rating: %s", rating_sql_insert->data);
++ 				res = PQexec(conn_dim, rating_sql_insert->data);
++ 				if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++ 					EVENT_RES_ERROR(conn_dim, "failed to insert into unique_ratings table");
++ 				PQclear(res);
++ 
++ 				res = PQexec(conn_dim, rating_sql_select->data);
++ 				if (!res || (PQresultStatus(res) != PGRES_TUPLES_OK))
++ 					EVENT_RES_ERROR(conn_dim, "failed to query unique_ratings table");
++ 
++ 				if (PQntuples(res) == 1)
++ 				{
++ 					if (!PQgetisnull(res, 0, 0))
++ 						rating_id = atoi(PQgetvalue(res, 0, 0));
++ 					else
++ 						EVENT_RES_ERROR(conn_dim, "found NULL rating_id in unique_ratings table");
++ 				}
++ 				else
++ 					EVENT_RES_ERROR(conn_dim, "failed to insert into unique_ratings table");
++ 
++ 				PQclear(res);
++ 			}
++ 			else
++ 			{
++ 				/* something strange has gone wrong */
++ 				EVENT_RES_ERROR(conn_dim, "duplicate unique key found in unique_ratings table");
++ 			}
++ 
++ 			/* COMMIT/release the table LOCK */
++ 			res = PQexec(conn_dim, "COMMIT");
++ 			if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++ 				EVENT_RES_ERROR(conn_dim, "failed to COMMIT/UNLOCK unique_ratings table");
++ 			PQclear(res);
++ 
++ 			/* add record to the hash table */
++ 			rating_key->rating = rating;
++ 			addToHash(HASH_RATING, rating_key, rating_id);
++ 			rating_id = getDimFromHash(HASH_RATING, rating_key);
++ 
++ 			/* if rating not found, punt */
++ 			if (rating_id < 0)
++ 				EVENT_RES_ERROR(conn_dim, "failed to add to rating hash table");
++ 
++ 			/*
++ 			 * Now do any needed maintenance on the actual rating_dim table.
++ 			 * We do this separately because there are often more than one row
++ 			 * in the dimension table matching a particular bitmap. The dim table
++ 			 * in this case has its primary key built over both the rating_id
++ 			 * and cat_id column.
++ 			 */
++ 			res = PQexec(conn_dim, "BEGIN; LOCK TABLE rating_dim IN EXCLUSIVE MODE");
++ 			if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++ 				EVENT_RES_ERROR(conn_dim, "failed to LOCK rating_dim table");
++ 			PQclear(res);
++ 
++ 			pfree(rating_sql_select->data);
++ 			initStringInfo(rating_sql_select);
++ 			appendStringInfo(rating_sql_select, "select rating_id from rating_dim where "
++ 							 "rating_id = '%d'", rating_id);
++ 			res = PQexec(conn_dim, rating_sql_select->data);
++ 			if (!res || (PQresultStatus(res) != PGRES_TUPLES_OK))
++ 				EVENT_RES_ERROR(conn_dim, "failed to query rating_dim table");
++ 
++ 			/* in this case we could get more than one hit */
++ 			if (PQntuples(res) > 0)
++ 			{
++ 				if (!PQgetisnull(res, 0, 0))
++ 					rating_id = atoi(PQgetvalue(res, 0, 0));
++ 				else
++ 					EVENT_RES_ERROR(conn_dim, "found NULL rating_id in rating_dim table");
++ 
++ 				PQclear(res);
++ 			}
++ 			else
++ 			{
++ 				StringInfo		rating_sql_insert = makeStringInfo();
++ 				int				i;
++ 				catmapKey	   *catmap_key;
++ 
++ 				/*
++ 				 * if rating still not found, INSERT one or more rows.
++ 				 * Each category represented in the bitmap gets a row in rating_dim
++ 				 */
++ 				PQclear(res);
++ 
++ 				for (i = 0; i < strlen(rating); ++i)
++ 				{
++ 					if (rating[i] == '1')
++ 					{
++ 						catmap_key = getCatFromHash(HASH_CATMAP, i);
++ 
++ 						if (catmap_key)
++ 						{
++ 							appendStringInfo(rating_sql_insert,
++ 										 "insert into rating_dim (rating_id, rating, cat_id, cat_long, cat_short) "
++ 										 "values (%d, '%s', %d, %s, %s)",
++ 										  rating_id, rating_bits[i], catmap_key->catmap_id,
++ 										  quote_literal_cstr(catmap_key->cat_long),
++ 										  quote_literal_cstr(catmap_key->cat_short));
++ 							elog(DEBUG1, "INSERT rating_dim: %s", rating_sql_insert->data);
++ 							res = PQexec(conn_dim, rating_sql_insert->data);
++ 							if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++ 								EVENT_RES_ERROR(conn_dim, "failed to insert into rating_dim table");
++ 							PQclear(res);
++ 							pfree(catmap_key);
++ 							pfree(rating_sql_insert->data);
++ 							initStringInfo(rating_sql_insert);
++ 						}
++ 						else
++ 							EVENT_RES_ERROR(conn_dim, "category for rating not found in cat_map table");
++ 					}
++ 				}
++ 
++ 				res = PQexec(conn_dim, rating_sql_select->data);
++ 				if (!res || (PQresultStatus(res) != PGRES_TUPLES_OK))
++ 					EVENT_RES_ERROR(conn_dim, "failed to query rating_dim table");
++ 
++ 				if (PQntuples(res) > 0)
++ 				{
++ 					if (!PQgetisnull(res, 0, 0))
++ 						rating_id = atoi(PQgetvalue(res, 0, 0));
++ 					else
++ 						EVENT_RES_ERROR(conn_dim, "found NULL rating_id in rating_dim table");
++ 				}
++ 				else
++ 					EVENT_RES_ERROR(conn_dim, "failed to insert into rating_dim table");
++ 
++ 				PQclear(res);
++ 			}
++ 
++ 			/* COMMIT/release the table LOCK */
++ 			res = PQexec(conn_dim, "COMMIT");
++ 			if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++ 				EVENT_RES_ERROR(conn_dim, "failed to COMMIT/UNLOCK rating_dim table");
++ 			PQclear(res);
++ 		}
++ 		return rating_id;
++ 	}
++ 	else
++ 		EVENT_RES_ERROR(conn_dim, "unknown dimension requested");
++ 
++ 	return -1;
++ }
++ 
++ static char *
++ nstrtok(char *s, const char *delim)
++ {
++         register const char *spanp;
++         register int c, sc;
++         char *tok;
++         static char *last;
++ 
++ 
++         if (s == NULL && (s = last) == NULL)
++                 return (NULL);
++ 
++         tok = s;
++         /*
++          * Scan token (scan for delimiters: s += strcspn(s, delim), sort of).
++          * Note that delim must have one NUL; we stop if we see that, too.
++          */
++         for (;;) {
++                 c = *s++;
++                 spanp = delim;
++                 do {
++                         if ((sc = *spanp++) == c) {
++                                 if (c == 0)
++                                         s = NULL;
++                                 else
++                                         s[-1] = 0;
++                                 last = s;
++                                 return (tok);
++                         }
++                 } while (sc != 0);
++         }
++         /* NOTREACHED */
++ }
++ 
++ static char *
++ getPartitionStr(Timestamp timestamp, bool is_tblname, bool trunc_time)
++ {
++ 	StringInfo		tablename = makeStringInfo();
++ 	char			tbltmp[128];
++ 	struct pg_tm	tt,
++ 				   *tm = &tt;
++ 	fsec_t			fsec;
++ 	char		   *tzn;
++ 
++ 	if ((TIMESTAMP_NOT_FINITE(timestamp)) ||
++ 		(timestamp2tm(timestamp, NULL, tm, &fsec, &tzn, NULL) != 0))
++ 		ereport(ERROR,
++ 		(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
++ 		errmsg("timestamp out of range")));
++ 
++ 	/*
++ 	 * See comments for timestamp2tm()
++ 	 * It creates a pg_tm struct, but with POSIX semantics
++ 	 * We need to readjust to Postgres semantics in order to use pg_strftime()
++ 	 */
++ 	tm->tm_mon -= 1;
++ 	tm->tm_year -= 1900;
++ 
++ 	if (is_tblname)
++ 	{
++ 		pg_strftime(tbltmp, sizeof(tbltmp), PARTITION_TBLNAME_FMT, tm);
++ 		appendStringInfo(tablename, "%s", tbltmp);
++ 	}
++ 	else if (trunc_time)
++ 	{
++ 		pg_strftime(tbltmp, sizeof(tbltmp), PARTITION_CRITERIA_FMT, tm);
++ 		appendStringInfo(tablename, "%s", tbltmp);
++ 	}
++ 	else
++ 	{
++ 		pg_strftime(tbltmp, sizeof(tbltmp), COPY_FMT, tm);
++ 		appendStringInfo(tablename, "%s", tbltmp);
++ 	}
++ 
++ 	return tablename->data;
++ }
++ 
++ 
++ /*
++  * Convert a time_t to Timestamp.
++  */
++ static Timestamp
++ time_t_to_timestamp(time_t tm)
++ {
++ 	Timestamp result;
++ 
++ 	result = (Timestamp) tm - ((POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY);
++ 
++ #ifdef HAVE_INT64_TIMESTAMP
++ 	result *= USECS_PER_SEC;
++ #endif
++ 
++ 	return result;
++ }
++ 
++ 
++ static bool
++ checkPartitionExists(char *tablename)
++ {
++ 	StringInfo		sql = makeStringInfo();
++ 	PGresult	   *res = NULL;
++ 	bool			tgt_exists = FALSE;
++ 
++ 	appendStringInfo(sql, "SELECT oid FROM pg_catalog.pg_class WHERE relname = '%s'",
++ 					 tablename);
++ 
++ 	res = PQexec(conn_copy, sql->data);
++ 	if (!res || (PQresultStatus(res) != PGRES_TUPLES_OK))
++ 	{
++ 		elog(DEBUG1, "%s", sql->data);
++ 		EVENT_RES_ERROR(conn_copy, "target table search failed");
++ 	}
++ 
++ 	if (PQntuples(res) > 0)
++ 	{
++ 		/* at least one table with this name exists already */
++ 		/* remove indexes on this table */
++ 		if (!PQgetisnull(res, 0, 0)) {
++                 	int oid = atoi(PQgetvalue(res, 0, 0));
++ 			StringInfo sql = makeStringInfo();
++ 			PGresult *res = NULL;
++ 
++ 			/* DROP index will update pg_catalog table which can't be updated concurrently, so have to lock (using partition_table_status) */
++                         res = PQexec(conn_dim, "BEGIN; LOCK TABLE partition_table_status IN EXCLUSIVE MODE");
++                         if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++                         	EVENT_RES_ERROR(conn_dim, "failed to LOCK partition_table_status table for dropping index");
++                         PQclear(res);
++ 
++ 			/* find out the indexes for this table */
++ 			appendStringInfo(sql, "SELECT relname FROM pg_catalog.pg_class WHERE oid IN (SELECT indexrelid FROM pg_catalog.pg_index WHERE indrelid=%d) AND relkind='i'", oid);
++ 			res = PQexec(conn_dim, sql->data);
++ 			if (!res || (PQresultStatus(res) != PGRES_TUPLES_OK))
++ 			{
++ 				elog(DEBUG1, "%s", sql->data);
++ 				EVENT_RES_ERROR(conn_dim, "target table index name search failed");
++ 			}
++ 			if (PQntuples(res) > 0) {
++ 				int n = PQntuples(res);
++ 				StringInfo sql1 = makeStringInfo();
++ 				int i=0;
++ 				for(i=0; i<n; i++) {
++ 					initStringInfo(sql1);
++ 					appendStringInfo(sql1, "DROP INDEX %s", PQgetvalue(res, i, 0));
++ 					PQexec(conn_dim, sql1->data);
++ 					elog(DEBUG1, "%s", sql1->data);
++ 					pfree(sql1->data);
++ 				}
++ 			}
++ 			PQclear(res);
++ 			pfree(sql->data);
++ 
++                         /* COMMIT/release the table LOCK */
++                  	res = PQexec(conn_dim, "COMMIT");
++                        	if (!res || (PQresultStatus(res) != PGRES_COMMAND_OK))
++                                	EVENT_RES_ERROR(conn_dim, "failed to COMMIT/UNLOCK partition_table_status table for dropping index");
++ 			PQclear(res);
++ 		} 
++ 		/* second step -- if tgt's name exists, see if it is visible to us */
++ 		PQclear(res);
++ 
++ 		pfree(sql->data);
++ 		initStringInfo(sql);
++ 		appendStringInfo(sql, "SELECT pg_table_is_visible('%s'::regclass)",
++ 						 tablename);
++ 	
++ 		res = PQexec(conn_copy, sql->data);
++ 		if (!res || (PQresultStatus(res) != PGRES_TUPLES_OK))
++ 		{
++ 			elog(DEBUG1, "%s", sql->data);
++ 			EVENT_RES_ERROR(conn_copy, "target table search failed");
++ 		}
++ 	
++ 		if (PQntuples(res) == 1)
++ 		{
++ 			if (!PQgetisnull(res, 0, 0))
++ 				tgt_exists = (*(PQgetvalue(res, 0, 0)) == 't');
++ 			else
++ 			{
++ 				elog(DEBUG1, "%s", sql->data);
++ 				EVENT_RES_ERROR(conn_copy, "target table search failed");
++ 			}
++ 		}
++ 		else
++ 		{
++ 			elog(DEBUG1, "%s", sql->data);
++ 			EVENT_RES_ERROR(conn_copy, "target table search failed");
++ 		}
++ 
++ 		PQclear(res);
++ 	}
++ 	else
++ 	{
++ 		/* didn't find the table */
++ 		PQclear(res);
++ 	}
++ 
++ 	return tgt_exists;
++ }
+diff -cNr postgresql-9.1.2/contrib/event_load/event_load.h postgresql-9.1.2-ew/contrib/event_load/event_load.h
+*** postgresql-9.1.2/contrib/event_load/event_load.h	1969-12-31 16:00:00.000000000 -0800
+--- postgresql-9.1.2-ew/contrib/event_load/event_load.h	2012-02-25 21:09:27.000000000 -0800
+***************
+*** 0 ****
+--- 1,17 ----
++ /*
++  * event_load
++  *
++  */
++ 
++ #ifndef EVENT_LOAD_H
++ #define EVENT_LOAD_H
++ 
++ /*
++  * External declarations
++  */
++ extern Datum init_event_processing(PG_FUNCTION_ARGS);
++ extern Datum process_event_file(PG_FUNCTION_ARGS);
++ extern Datum rating_categories(PG_FUNCTION_ARGS);
++ extern Datum partition_tblname(PG_FUNCTION_ARGS);
++ 
++ #endif   /* EVENT_LOAD_H */
+diff -cNr postgresql-9.1.2/contrib/event_load/event_load.sql.in postgresql-9.1.2-ew/contrib/event_load/event_load.sql.in
+*** postgresql-9.1.2/contrib/event_load/event_load.sql.in	1969-12-31 16:00:00.000000000 -0800
+--- postgresql-9.1.2-ew/contrib/event_load/event_load.sql.in	2012-02-25 21:09:27.000000000 -0800
+***************
+*** 0 ****
+--- 1,22 ----
++ -- Adjust this setting to control where the objects get created.
++ SET search_path = public;
++ 
++ CREATE OR REPLACE FUNCTION init_event_processing(int)
++ RETURNS text
++ AS 'MODULE_PATHNAME','init_event_processing'
++ LANGUAGE 'C' IMMUTABLE STRICT;
++ 
++ CREATE OR REPLACE FUNCTION process_event_file(int, text, int)
++ RETURNS text
++ AS 'MODULE_PATHNAME','process_event_file'
++ LANGUAGE 'C' IMMUTABLE STRICT;
++ 
++ CREATE OR REPLACE FUNCTION rating_categories(bit(128), int)
++ RETURNS text
++ AS 'MODULE_PATHNAME','rating_categories'
++ LANGUAGE 'C' IMMUTABLE STRICT;
++ 
++ CREATE OR REPLACE FUNCTION partition_tblname(timestamp without time zone)
++ RETURNS text
++ AS 'MODULE_PATHNAME','partition_tblname'
++ LANGUAGE 'C' IMMUTABLE STRICT;
+diff -cNr postgresql-9.1.2/contrib/event_load/expected/event_load.out postgresql-9.1.2-ew/contrib/event_load/expected/event_load.out
+*** postgresql-9.1.2/contrib/event_load/expected/event_load.out	1969-12-31 16:00:00.000000000 -0800
+--- postgresql-9.1.2-ew/contrib/event_load/expected/event_load.out	2012-02-25 21:09:27.000000000 -0800
+***************
+*** 0 ****
+--- 1,5 ----
++ --
++ -- first, define the functions.  Turn off echoing so that expected file
++ -- does not depend on contents of event_load.sql.
++ --
++ \set ECHO none
+diff -cNr postgresql-9.1.2/contrib/event_load/Makefile postgresql-9.1.2-ew/contrib/event_load/Makefile
+*** postgresql-9.1.2/contrib/event_load/Makefile	1969-12-31 16:00:00.000000000 -0800
+--- postgresql-9.1.2-ew/contrib/event_load/Makefile	2012-02-25 21:09:27.000000000 -0800
+***************
+*** 0 ****
+--- 1,20 ----
++ MODULE_big = event_load
++ PG_CPPFLAGS = -I$(libpq_srcdir)
++ OBJS	= event_load.o
++ SHLIB_LINK = $(libpq)
++ 
++ DATA_built = event_load.sql
++ DOCS = README.event_load
++ REGRESS = event_load
++ 
++ ifdef USE_PGXS
++ PGXS := $(shell pg_config --pgxs)
++ include $(PGXS)
++ else
++ subdir = contrib/event_load
++ top_builddir = ../..
++ include $(top_builddir)/src/Makefile.global
++ include $(top_srcdir)/contrib/contrib-global.mk
++ endif
++ 
++ override CFLAGS += -O
+\ No newline at end of file
+diff -cNr postgresql-9.1.2/contrib/event_load/README.event_load postgresql-9.1.2-ew/contrib/event_load/README.event_load
+*** postgresql-9.1.2/contrib/event_load/README.event_load	1969-12-31 16:00:00.000000000 -0800
+--- postgresql-9.1.2-ew/contrib/event_load/README.event_load	2012-02-25 21:09:27.000000000 -0800
+***************
+*** 0 ****
+--- 1,31 ----
++ /*
++  * event_load
++  */
++ Version 0.1 -- St Bernard Software
++ 
++ This module processes pre-parsed events files and loads them into database. It does several things:
++ - create partition table (partitioned by day) if necessary
++ - update partiton_table_status table
++ - maintain dimension tables
++ - lookup ids in dimension table and copy event entries into main tables
++ 
++ It provides two stored procedures:
++   init_event_processing(batch_size); # initialize hash tables
++   process_event_file(port_no, file_name, iprism_serial_no); # actually load data
++ 
++ Release Notes:
++ 
++   Version 0.1
++     - initial release    
++ 
++ Installation:
++   Place these files in a directory called 'event_load' under 'contrib' in the
++   PostgreSQL source tree. Then run:
++ 
++     make
++     make install
++ 
++   You can use event_load.sql to create the functions in your database of choice, e.g.
++ 
++     psql -U postgres template1 < event_load.sql
++ 
+diff -cNr postgresql-9.1.2/contrib/event_load/sql/event_load.sql postgresql-9.1.2-ew/contrib/event_load/sql/event_load.sql
+*** postgresql-9.1.2/contrib/event_load/sql/event_load.sql	1969-12-31 16:00:00.000000000 -0800
+--- postgresql-9.1.2-ew/contrib/event_load/sql/event_load.sql	2012-02-25 21:09:27.000000000 -0800
+***************
+*** 0 ****
+--- 1,8 ----
++ --
++ -- first, define the functions.  Turn off echoing so that expected file
++ -- does not depend on contents of event_load.sql.
++ --
++ \set ECHO none
++ \i event_load.sql
++ \set ECHO all
++ 
+diff -cNr postgresql-9.1.2/contrib/Makefile postgresql-9.1.2-ew/contrib/Makefile
+*** postgresql-9.1.2/contrib/Makefile	2011-12-01 13:47:20.000000000 -0800
+--- postgresql-9.1.2-ew/contrib/Makefile	2012-02-25 21:08:10.000000000 -0800
+***************
+*** 18,23 ****
+--- 18,24 ----
+  		dict_xsyn	\
+  		dummy_seclabel	\
+  		earthdistance	\
++ 		event_load	\
+  		file_fdw	\
+  		fuzzystrmatch	\
+  		hstore		\
+diff -cNr postgresql-9.1.2/src/backend/libpq/md5.c postgresql-9.1.2-ew/src/backend/libpq/md5.c
+*** postgresql-9.1.2/src/backend/libpq/md5.c	2011-12-01 13:47:20.000000000 -0800
+--- postgresql-9.1.2-ew/src/backend/libpq/md5.c	2012-02-25 20:56:05.000000000 -0800
+***************
+*** 343,345 ****
+--- 343,362 ----
+  
+  	return ret;
+  }
++ 
++ /*
++  *    RAPID: <qyang@stbernard.com> 08/21/2006
++  *    ERS Update: <joe.conway@credativ.com> 02/26/2012
++  *    pg_md5_hash_hex
++  *
++  *    Calculates the MD5 sum of the bytes in a buffer.
++  *    OUTPUT  sum should be a buffer at least 16 bytes long. It is a hex number.
++  */
++ bool
++ pg_md5_hash_hex(const void *buff, size_t len, uint8* sum)
++ {
++ 	if (!calculateDigestFromBuffer((uint8 *) buff, len, sum))
++ 		return false;
++ 	return true;
++ }
++ 
+diff -cNr postgresql-9.1.2/src/include/libpq/md5.h postgresql-9.1.2-ew/src/include/libpq/md5.h
+*** postgresql-9.1.2/src/include/libpq/md5.h	2011-12-01 13:47:20.000000000 -0800
+--- postgresql-9.1.2-ew/src/include/libpq/md5.h	2012-02-25 20:58:35.000000000 -0800
+***************
+*** 23,28 ****
+--- 23,29 ----
+  
+  
+  extern bool pg_md5_hash(const void *buff, size_t len, char *hexsum);
++ extern bool pg_md5_hash_hex(const void *buff, size_t len, uint8* hexsum);
+  extern bool pg_md5_binary(const void *buff, size_t len, void *outbuf);
+  extern bool pg_md5_encrypt(const char *passwd, const char *salt,
+  			   size_t salt_len, char *buf);
+diff -cNr postgresql-9.1.2/src/pl/plpython/Makefile postgresql-9.1.2-ew/src/pl/plpython/Makefile
+*** postgresql-9.1.2/src/pl/plpython/Makefile	2011-12-01 13:47:20.000000000 -0800
+--- postgresql-9.1.2-ew/src/pl/plpython/Makefile	2012-02-25 21:02:47.000000000 -0800
+***************
+*** 9,15 ****
+  # shared library.  Since there is no official way to determine this
+  # (at least not in pre-2.3 Python), we see if there is a file that is
+  # named like a shared library.
+! ifneq (,$(wildcard $(python_libdir)/libpython*$(DLSUFFIX)*))
+  shared_libpython = yes
+  endif
+  
+--- 9,15 ----
+  # shared library.  Since there is no official way to determine this
+  # (at least not in pre-2.3 Python), we see if there is a file that is
+  # named like a shared library.
+! ifneq (,$(wildcard $(python_libdir)/../../libpython*$(DLSUFFIX)*))
+  shared_libpython = yes
+  endif
+  

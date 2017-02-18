@@ -1,0 +1,594 @@
+<!DOCTYPE HTML>
+<!--
+	Editorial by HTML5 UP
+	html5up.net | @ajlkn
+	Free for personal and commercial use under the CCA 3.0 license (html5up.net/license)
+-->
+<html>
+	<head>
+		<title>Joseph Conway - PL/R Wiki</title>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+		<!--[if lte IE 8]><script src="assets/js/ie/html5shiv.js"></script><![endif]-->
+		<link rel="stylesheet" href="assets/css/main.css" />
+		<!--[if lte IE 9]><link rel="stylesheet" href="assets/css/ie9.css" /><![endif]-->
+		<!--[if lte IE 8]><link rel="stylesheet" href="assets/css/ie8.css" /><![endif]-->
+	</head>
+	<body>
+
+		<!-- Wrapper -->
+			<div id="wrapper">
+
+						<!-- Main -->
+							<div id="main">
+								<div class="inner">
+
+									<!-- Header -->
+										<a name="about"></a>
+										<header id="header">
+											<a href="index.html" class="logo"><strong>Joseph Conway</strong></a>
+											<ul class="icons">
+												<li><a href="https://twitter.com/josepheconway" class="icon fa-twitter"><span class="label">Twitter</span></a></li>
+												<li><a href="https://www.facebook.com/jconway" class="icon fa-facebook"><span class="label">Facebook</span></a></li>
+												<li><a href="https://www.linkedin.com/in/josepheconway" class="icon fa-linkedin"><span class="label">LinkedIn</span></a></li>
+												<li><a href="http://github.com/jconway/" class="icon fa-github"><span class="label">GitHub</span></a></li>
+											</ul>
+										</header>
+									<!-- Content -->
+										<section>
+											<header class="major">
+												<h2>PL/R Wiki Documentation</h2>
+											</header>
+											<!-- begin docs -->
+
+											<h3>PL/R - R Procedural Language for PostgreSQL</h3>
+											<p>Copyright &copy; 2003-2017 by Joseph E Conway</p>
+											<hr>
+										 <div >
+											<dl>
+											 <dt><h3>Table of Contents</h3></dt>
+											 <dt>1. <a href="#PLR-CHANGE-LOG">Change log</a></dt>
+											 <dt>2. Documentation&nbsp;<a href="doc/doc.html">(html)</a> | <a href="doc/plr-US.pdf">(pdf)</a> | <a href="notes.html">(notes)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="http://github.com/jconway/plr">Source repo via github</a></dt>
+
+											 <dt>3. <a href="doc/downloads/plr-8.2.0.10.tar.gz">Download PL/R source (plr-8.2.0.10) for PostgreSQL 8.2</a></dt>
+
+											 <dt>4. <a href="doc/downloads/plr-8.3.0.16.tar.gz">Download PL/R source (plr-8.3.0.16) for PostgreSQL 8.3 and higher</a></dt>
+
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.16-pg9.5-R3.3.0-win32.zip">Win32 plr.dll for Postgres 9.5.x, R-3.3.0 (plr-8.3.0.16)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.16-pg9.5-R3.3.0-win64.zip">Win64 plr.dll for Postgres 9.5.x, R-3.3.0 (plr-8.3.0.16)</a></dt>
+
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.16-pg9.4-win32.zip">Win32 plr.dll for Postgres 9.4.x (plr-8.3.0.16)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.16-pg9.4-win64.zip">Win64 plr.dll for Postgres 9.4.x (plr-8.3.0.16)</a></dt>
+
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.15-pg9.3-win32.zip">Win32 plr.dll for Postgres 9.3.x (plr-8.3.0.15)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.15-pg9.3-win64.zip">Win64 plr.dll for Postgres 9.3.x (plr-8.3.0.15)</a></dt>
+
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.14-pg9.2-win32.zip">Win32 plr.dll for Postgres 9.2.x (plr-8.3.0.14)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.14-pg9.2-win64.zip">Win64 plr.dll for Postgres 9.2.x (plr-8.3.0.14)</a></dt>
+
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.13-pg9.1-win32.zip">Win32 plr.dll for Postgres 9.1.x (plr-8.3.0.13)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.13-pg9.1-win64.zip">Win64 plr.dll for Postgres 9.1.x (plr-8.3.0.13)</a></dt>
+
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.13-win32.zip">Win32 plr.dll for Postgres 9.0.x (plr-8.3.0.13)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.13-win64.zip">Win64 plr.dll for Postgres 9.0.x (plr-8.3.0.13)</a></dt>
+
+											 <dt>5. <b>Old Releases</b>: Win32 installer thanks to Mike Leahy: <a href="doc/downloads/win32.html">Win32 Notes</a></dt>
+
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.11-pg83-r211.win32.zip">Win32 plr.dll for Postgres 8.3.x (plr-8.3.0.11)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.11-pg84-r211.win32.zip">Win32 plr.dll for Postgres 8.4.x (plr-8.3.0.11)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.11-pg90-r211.win32.zip">Win32 plr.dll for Postgres 9.0.x (plr-8.3.0.11)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.11-pg90-r211.win64.zip">Win64 plr.dll for Postgres 9.0.x (plr-8.3.0.11)</a></dt>
+
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.11_pg83_r211_win32.exe">Win32 binary installer for Postgres 8.3.x (plr-8.3.0.11)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.11_pg84_r211_win32.exe">Win32 binary installer for Postgres 8.4.x (plr-8.3.0.11)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.11_pg90_r211_win32.exe">Win32 binary installer for Postgres 9.0.x (plr-8.3.0.11)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.11_pg90_r211_win64.exe">Win64 binary installer for Postgres 9.0.x (plr-8.3.0.11)</a></dt>
+
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.11-pg83-r211-win32-setup-src.zip">Win32 Source Installer for Postgres 8.3.x (plr-8.3.0.11)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.11-pg84-r211-win32-setup-src.zip">Win32 Source Installer for Postgres 8.4.x (plr-8.3.0.11)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.11-pg90-r211-win32-setup-src.zip">Win32 Source Installer for Postgres 9.0.x (plr-8.3.0.11)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.11-pg90-r211-win64-setup-src.zip">Win64 Source Installer for Postgres 9.0.x (plr-8.3.0.11)</a></dt>
+
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.11-1.fc13.x86_64.rpm">RPM for Fedora 13 (plr-8.3.0.11)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-debuginfo-8.3.0.11-1.fc13.x86_64.rpm">debug RPM for Fedora 13 (plr-8.3.0.11)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.3.0.11-1.fc13.src.rpm">Source RPM (plr-8.3.0.11)</a></dt>
+
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.2.0.7_0_win32.exe">Win32 binary installer for Postgres 8.2.x (plr-8.2.0.7)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.2.0.7-win32-setup-src.zip">Win32 Source Installer for Postgres 8.2.x (plr-8.2.0.7)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/plr-8.2.0.7-win32.zip">Win32 Binary for PostgreSQL 8.2.x and R-2.5.x (plr-8.2.0.7)</a></dt>
+
+											 <dt>6. <b>Old Releases</b>: karmic Debs thanks to Mike Leahy:</dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/postgresql-8.4-plr_8.3.0.10-1_i386.deb">i386 karmic Deb for Postgres 8.4.x (plr-8.3.0.10)</a></dt>
+											 <dt>&nbsp;&nbsp;&nbsp;&nbsp;<a href="doc/downloads/postgresql-8.4-plr_8.3.0.10-1_amd64.deb">amd64 karmic Deb for Postgres 8.4.x (plr-8.3.0.10)</a></dt>
+
+											 <dt>7. <a href="http://pgfoundry.org/mail/?group_id=1000247">Get Help</a></dt>
+											</dl>
+										 </div>
+										 <hr ALIGN="LEFT" WIdtH="100%">
+										 <div>
+											<A NAME="PLR-CHANGE-LOG"></a>
+
+											<h3><b>Change log: 8.3.0.15 to 8.3.0.16</b></h3>
+											<dl>
+											 <dt>- Update for PostgreSQL 9.5 dev compatibility</dt>
+											 <dt>- Update copyrights</dt>
+											 <dt>- Add check and throw an error when don't have an expectedDesc.</dt>
+											 <dt>- Remove autocommit setting -- it has been removed in PostgreSQL 9.5, and it has been ineffective for a long time. Reported by Peter E.</dt>
+											 <dt>- Fix RPM spec file</dt>
+											</dl>
+
+											<h3><b>Change log: 8.3.0.14 to 8.3.0.15</b></h3>
+											<dl>
+											 <dt>- Update for PostgreSQL 9.3 compatibility</dt>
+											 <dt>- Ensure certain errors in R code do not crash postgres</dt>
+											 <dt>- Unbreak compilation with older versions of postgres not having rangetypes</dt>
+											 <dt>- Allow use of OUT parameters</dt>
+											</dl>
+
+											<h3><b>Change log: 8.3.0.13.1 to 8.3.0.14</b></h3>
+											<dl>
+											 <dt>- Update copyright for 2013</dt>
+											 <dt>- Remove hack to take signal back from R interpreter (Mark Kirkwood)</dt>
+											 <dt>- Set R_SignalHandlers = 0, the proper way to prevent R from taking signals in the first place (Mark Kirkwood)</dt>
+											 <dt>- Adjust RPM spec file</dt>
+											 <dt>- As of pg9.2 the syntax "LANGUAGE 'C'" no longer works. Use "LANGUAGE C" instead.</dt>
+											 <dt>- The MacPorts installation has the header filed distributed across two different directories, so there is no single "rincludedir" to query from pkg-config. Instead, do it the proper way and ask pkg-config for the cflags, which should work for all installation variants. (Peter Eisentraut)</dt>
+											</dl>
+
+											<h3><b>Change log: 8.3.0.13 to 8.3.0.13.1</b></h3>
+											<dl>
+											 <dt>- Fix CREATE FUNCTION statements so that they work with PostgreSQL 9.2.x</dt>
+											</dl>
+
+											<h3><b>Change log: 8.3.0.12 to 8.3.0.13</b></h3>
+											<dl>
+											 <dt>- Fix Makefile so that msvc scripts can process it successfully</dt>
+											 <dt>- Add support for pgsql 9.1 CREATE EXTENSION</dt>
+											 <dt>- Put in safeguard to prevent attempted return of non-data (e.g. closure) types from R unless the pg return type is BYTEA</dt>
+											 <dt>- Correct thinko from earlier pass-by-val array optimization</dt>
+											 <dt>- Fix crashbug related to conversion of R data.frame to Postgres array on function return</dt>
+											 <dt>- Add plr_version() function: outputs a version string</dt>
+											 <dt>- New feature: allow PL/R functions to be declared and used as WINDOW functions</dt>
+											 <dt>- Minor fixes for compiler warnings by updated gcc</dt>
+											 <dt>- Fix missing calls to UNPROTECT. Report and patch by Ben Leiting.</dt>
+											 <dt>- Take SIGINT back into Postgres control from R. Report and test case by Terry Schmitt.</dt>
+											 <dt>- Don't try to free an array element value when the array element is NULL</dt>
+											 <dt>- Allow pg.spi.prepare/pg.spi.execp to use parameters which are 1D arrays</dt>
+											</dl>
+
+											<h3><b>Change log: 8.3.0.11 to 8.3.0.12</b></h3>
+											<dl>
+											 <dt>- Fix Windows only, latent crashbug. Only actually crashes on new Win64 port, but only by luck</dt>
+											</dl>
+
+											<h3><b>Change log: 8.3.0.10 to 8.3.0.11</b></h3>
+											<dl>
+											 <dt>- Minor improvements to how/when SPI is connected which reduces unnecessary memory context switching/thrashing</dt>
+											 <dt>- Special case array marshaling, in and out, for int4 and float8 arrays if certain conditions are met. This results in dramatic performance improvement when, for example, passing very large float8 arrays on a 64 bit machine from pg to R.</dt>
+											 <dt>- Fix crashbug where array datum is NULL under certain circumstances</dt>
+											 <dt>- Fix failure under recursive SPI calls</dt>
+											 <dt>- Fix crashbug where error message used dangling pointer</dt>
+											 <dt>- Add plr.spec thanks to Tom Payne. Based on CentOS 5.5, but builds fine on Fedora 13.</dt>
+											 <dt>- silence compiler warning
+											</dl>
+
+											<h3><b>Change log: 8.3.0.9 to 8.3.0.10</b></h3>
+											<dl>
+											 <dt>- Fixed array data type columns incorrectly converted when part of a return tuple</dt>
+											 <dt>- Ensure input datum gets detoasted prior to copying to R object for bytea inputs</dt>
+											</dl>
+
+											<h3><b>Change log: 8.3.0.8 to 8.3.0.9</b></h3>
+											<dl>
+											 <dt>- Make PL/R compile under MSVC to produce usable win32 binaries</dt>
+											 <dt>- Updated copyright notices for 2010</dt>
+											 <dt>- Remove obsolete info from README and point to web site instead</dt>
+											 <dt>- Consolidate and reorder all header files in order to avoid namespace conflicts between postgres/R/Win32</dt>
+											 <dt>- Rather than referencing pkglib_path and Dynamic_library_path, reference my_exec_path instead. This is because the former are not exported in win32 and the latter is. Instead get Dynamic_library_path by calling GetConfigOptionByName() and pkglib_path by calling get_pkglib_path().</dt>
+											 <dt>- Recognize hex input since bytea output is formatted that way by default starting with PostgreSQL 9.0</dt>
+											 <dt>- Avoid dynamic assignments with array constructors since MSVC cannot handle them.</dt>
+											 <dt>- Workaround fact that "char **environ" is not available on win32 for plr_environ()</dt>
+											</dl>
+
+											<h3><b>Change log: 8.3.0.7 to 8.3.0.8</b></h3>
+											<h3><b>Change log: 8.2.0.9 to 8.2.0.10</b></h3>
+											<dl>
+											 <dt>- Makefile fix for Mac OSX per kostas savvidis</dt>
+											 <dt>- Added RPostgreSQL compatability functions</dt>
+											 <dt>- Added ability to send serialized R objects to Postgres as bytea return values</dt>
+											 <dt>- Added ability to convert bytea arguments from Postgres back into the original R object</dt>
+											 <dt>- Added function to unserialize bytea value in order to restore object outside of R (useful for image data)</dt>
+											 <dt>- Work on this release was carried out in collaboration with the Chief Information Officer Branch, Treasury Board Secretariat, of the Canadian Government</dt>
+											</dl>
+
+											<h3><b>Change log: 8.3.0.6 to 8.3.0.7</b></h3>
+											<h3><b>Change log: 8.2.0.8 to 8.2.0.9</b></h3>
+											<h3><b>Change log: 0.6.2.9 to 0.6.2.10</b></h3>
+											<dl>
+											 <dt>- Fixed "Rdevices.h" not found error related to R-2.8.x</dt>
+											 <dt>- Fixed crashbug reported by Jeff Hamann. When a data frame had a factor column with a value in the first row, but NA in a subsequent row, a non-trapped R error would cause a segfault (PL/R's bug, not R)</dt>
+											 <dt>- Corrected Makefile for use on Gentoo per Ian Stakenvicius</dt>
+											 <dt>- Add facility to create pdf version of docs</dt>
+											</dl>
+
+											<h3><b>Change log: 8.3.0.5-beta to 8.3.0.6</b></h3>
+											<h3><b>Change log: 8.2.0.7 to 8.2.0.8</b></h3>
+											<h3><b>Change log: 0.6.2.8 to 0.6.2.9</b></h3>
+											<dl>
+											 <dt>- Fix Makefile for include directory names with embedded spaces</dt>
+											 <dt>- Eliminate warnings that started with R-2.6.0 related to lack of const declarations</dt>
+											 <dt>- Add --no-restore to startup options</dt>
+											 <dt>- Fix old bug related to Rversion.h appearing after user of R_VERSION in precompiler tests. Led to Rembedded.h not getting included</dt>
+											 <dt>- Added explicit define for KillAllDevices as it has been removed from Rdevices.h as of R-2.7.0</dt>
+											</dl>
+
+											<h3><b>Change log: 8.3.0.4-beta to 8.3.0.5-beta</b></h3>
+											<h3><b>Change log: 8.2.0.6 to 8.2.0.7</b></h3>
+											<h3><b>Change log: 0.6.2.7 to 0.6.2.8</b></h3>
+											<dl>
+											 <dt>- fix for non-portable use of setenv</dt>
+											</dl>
+
+											<h3><b>Change log: 8.3.0.3-beta to 8.3.0.4-beta</b></h3>
+											<h3><b>Change log: 8.2.0.5 to 8.2.0.6</b></h3>
+											<h3><b>Change log: 0.6.2.6 to 0.6.2.7</b></h3>
+											<dl>
+											 <dt>- If R_HOME environment variable is not defined, attempt to find it using pkg-config. (idea from Dirk Eddelbuettel)</dt>
+											 <dt>- In any case, create define for default R_HOME based on pkg-config. Use the default R_HOME during R interpreter init if the environment variable is unset. (idea from Dirk Eddelbuettel)</dt>
+											 <dt>- Use PGdlLIMPORT instead of dlLIMPORT if it is defined.</dt>
+											 <dt>- Switch to Rf_isVectorList instead of IS_LIST for spi_execp argument test. Prior to R-2.4.0, the latter allows bad arguments to get past, causing a segfault in an R internal type coersion function. (found by Steve Singer)</dt>
+											 <dt>- New spi cursor manipulation functions (patch courtesy of Steve Singer).</dt>
+											 <dt>- Force R interpreter non-interactive mode. Fixes some cases that previously appeared to be hung postgres backends in certain errors occured in R (R was actually waiting for user input). On some platforms this situation caused segfaults instead. (found by Jie Zhang)</dt>
+											 <dt>- When a plr function source is empty, plr tries to find a function by the same name within the R interpreter environment. If the function could not be found, it would cause a hang or segfault. This was not easily trapped in the R interpreter. Now, build and compile the equivalent plr source. This allows the R interpreter to trap the error properly when the function does not exist. (found by Jie Zhang)</dt>
+											 <dt>- PG_VERSION_NUM if available. (patch courtesy of Neal Conway)</dt>
+											 <dt>- Plug memory leak in POP_PLERRCONTEXT. (patch courtesy of Steve Singer)</dt>
+											</dl>
+
+											<h3><b>Change log: 8.3.0.2-beta to 8.3.0.3-beta</b></h3>
+											<h3><b>Change log: 8.2.0.4 to 8.2.0.5</b></h3>
+											<h3><b>Change log: 0.6.2.5 to 0.6.2.6</b></h3>
+											<dl>
+											 <dt>- modify Makefile so that the build works on win32 without workarounds</dt>
+											 <dt>- strip or replace embedded carriage returns to prevent R engine syntax errors</dt>
+											 <dt>- Win32 Binaries and installers courtesy of Mike Leahy</dt>
+											</dl>
+
+											<h3><b>Change log: 8.3.0.1-beta to 8.3.0.2-beta</b></h3>
+											<h3><b>Change log: 8.2.0.3 to 8.2.0.4</b></h3>
+											<h3><b>Change log: 0.6.2.4 to 0.6.2.5</b></h3>
+											<dl>
+											 <dt>- add dlLIMPORT to Dynamic_library_path declaration for Win32 support (thanks to Mike Leahy for the critical clues)</dt>
+											 <dt>- add pkglib_path[] declaration for Win32 support</dt>
+											 <dt>- modify debug code for PROTECT/UNPROTECT</dt>
+											 <dt>- add missing UNPROTECT(1) in spi code -- fix for "stack imbalance" warning</dt>
+											 <dt>- see the <a href="doc/plr-install.html">docs</a> for notes on Windows installation.
+											</dl>
+
+											<h3><b>Change log: 8.3.0-beta to 8.3.0.1-beta</b></h3>
+											<h3><b>Change log: 8.2.0.2 to 8.2.0.3</b></h3>
+											<h3><b>Change log: 0.6.2.3 to 0.6.2.4</b></h3>
+											<dl>
+											 <dt>- fix crash related to mishandling of R parse errors; thanks to Steve Singer for report and test case</dt>
+											</dl>
+
+											<h3><b>Change log: 8.2.0.1-beta to 8.3.0-beta</b></h3>
+											<dl>
+											 <dt>- preserve callers memory context rather than assuming query memory context</dt>
+											 <dt>- register plr_atexit using atexit() so that when R interpreter exit()'s on failure to initialize (e.g. if R_HOME is incorrect) we throw an error instead of killing the postgres backend unexpectedly</dt>
+											 <dt>- fix crash related to HeapTupleHeaderGetCmin() no longer working as before</dt>
+											 <dt>- replace call to R function lcons() with explicit call to Rf_lcons() since postgres also has an lcons() function (Neil Conway)</dt>
+											 <dt>- use PG_DETOAST_DATUM() on array arguments to ensure they get detoasted if needed</dt>
+											 <dt>- R and Postgres attempt to define symbols with the same name in their header files. Change to workaround alternative that is less of a kludge (Neil Conway)</dt>
+											 <dt>- fix for R_VERSION >= 2.5.0, R_ParseVector has extra arguments</dt>
+											</dl>
+
+											<h3><b>Change log: 8.2.0.1-beta to 8.2.0.2</b></h3>
+											<dl>
+											 <dt>- preserve callers memory context rather than assuming query memory context</dt>
+											 <dt>- register plr_atexit using atexit() so that when R interpreter exit()'s on failure to initialize (e.g. if R_HOME is incorrect) we throw an error instead of killing the postgres backend unexpectedly</dt>
+											 <dt>- replace call to R function lcons() with explicit call to Rf_lcons() since postgres also has an lcons() function (Neil Conway)</dt>
+											 <dt>- use PG_DETOAST_DATUM() on array arguments to ensure they get detoasted if needed</dt>
+											 <dt>- R and Postgres attempt to define symbols with the same name in their header files. Change to workaround alternative that is less of a kludge (Neil Conway)</dt>
+											 <dt>- fix for R_VERSION >= 2.5.0, R_ParseVector has extra arguments</dt>
+											</dl>
+
+											<h3><b>Change log: 0.6.2.2-alpha to 0.6.2.3</b></h3>
+											<dl>
+											 <dt>- preserve callers memory context rather than assuming query memory context</dt>
+											 <dt>- register plr_atexit using atexit() so that when R interpreter exit()'s on failure to initialize (e.g. if R_HOME is incorrect) we throw an error instead of killing the postgres backend unexpectedly</dt>
+											 <dt>- replace call to R function lcons() with explicit call to Rf_lcons() since postgres also has an lcons() function (Neil Conway)</dt>
+											 <dt>- use PG_DETOAST_DATUM() on array arguments to ensure they get detoasted if needed</dt>
+											 <dt>- fix for R_VERSION >= 2.5.0, R_ParseVector has extra arguments</dt>
+											</dl>
+
+											<h3><b>Change log: 8.2.0-beta to 8.2.0.1-beta</b></h3>
+											<dl>
+											 <dt><b>Security related fix (thanks to Jeffrey R. Greco):</b></dt>
+											 <dt>- plr_modules table must now exist in the same schema as the language handler of the first executing PL/R function</dt>
+											 <dt>- added to install script: REVOKE EXECUTE ON FUNCTION install_rcmd (text) FROM PUBLIC </dt>
+											</dl>
+
+											<h3><b>Change log: 0.6.2.1-alpha to 0.6.2.2-alpha</b></h3>
+											<dl>
+											 <dt><b>Security related fix (thanks to Jeffrey R. Greco):</b></dt>
+											 <dt>- plr_modules table must now exist in the same schema as the language handler of the first executing PL/R function</dt>
+											 <dt>- added to install script: REVOKE EXECUTE ON FUNCTION install_rcmd (text) FROM PUBLIC </dt>
+											</dl>
+
+											<h3><b>Change log: 0.6.2-alpha to 8.2.0-beta</b></h3>
+											<dl>
+											 <dt><b>Update:</b></dt>
+											 <dt>- Modify to work properly with PostgreSQL 8.2 (soon-to-be-beta) and R 2.3.x.</dt>
+											 <dt>- Support for previous versions of PostgreSQL removed. From this point forward PL/R releases will be kept in sync with PostgreSQL major releases</dt>
+											 <dt>- Added support for NULL array elements</dt>
+											 <dt><b>Security related fix (thanks to Jeffrey R. Greco):</b></dt>
+											 <dt>- plr_modules table must now exist in the same schema as the executing PL/R function</dt>
+											</dl>
+
+											<h3><b>Change log: 0.6.2-alpha to 0.6.2.1-alpha</b></h3>
+											<dl>
+											 <dt><b>Security related fix (thanks to Jeffrey R. Greco):</b></dt>
+											 <dt>- plr_modules table must now exist in the same schema as the executing PL/R function</dt>
+											</dl>
+
+											<h3><b>Change log: 0.6.1-alpha to 0.6.2-alpha</b></h3>
+											<dl>
+											 <dt><b>Update:</b></dt>
+											 <dt>- Modify to work properly with PostgreSQL 8.1beta and R 2.1.x.</dt>
+											 <dt><b>Bug fixes:</b></dt>
+											 <dt>- Adjust makefiles to ensure PKGLIBDIR and dlSUFFIX are defined to non-empty strings before trying to use them.</dt>
+											 <dt>- Fix crash bug when plr.so could not be found by expand_dynamic_library_name().</dt>
+											 <dt>- Add missing include for "utils/memutils.h".</dt>
+											 <dt>- Fix problem of $libdir not being found on pgxs builds.</dt>
+											 <dt>- Eliminate installcheck override warning.</dt>
+											</dl>
+
+											<h3><b>Change log: 0.6.0b-alpha to 0.6.1-alpha</b></h3>
+											<dl>
+											 <dt><b>Update:</b></dt>
+											 <dt>- Modify to work properly with PostgreSQL 8.0.0 and R 2.0.x.</dt>
+											 <dt><b>Bug fixes:</b></dt>
+											 <dt>- Initialize flinfo struct properly</dt>
+											 <dt>- Fix improper casting of factor levels to integers. Original works fine on 32 bit Intel systems,
+											but causes compiler warnings and segfaults on 64 bit systems.</dt>
+											 <dt>- Added PGXS makefile</dt>
+											 <dt>- Fix resource leak -- one PROTECT() was missing its compliment UNPROTECT in
+											pg_conversion.</dt>
+											</dl>
+
+											<h3><b>Change log: 0.6.0-alpha to 0.6.0b-alpha</b></h3>
+											<dl>
+											 <dt><b>Packaging fix:</b></dt>
+											 <dt>- Package now untars to ./plr instead of ./plr-0.6.0, allowing `make installcheck` to work properly.</dt>
+											</dl>
+
+											<h3><b>Change log: 0.5.4-alpha to 0.6.0-alpha</b></h3>
+											<dl>
+											 <dt><b>Bug fixes:</b></dt>
+											 <dt>- Handle dropped columns correctly.</dt>
+											 <dt>- Adjust Makefile for dylib suffix expected on libR on Mac OS X machines.</dt>
+											 <dt>- Transform '_' to '.' in data.frame column names derived from Postgres tuples for R < 1.9.0.</dt>
+											 <dt><b>Enhancements:</b></dt>
+											 <dt>- Several adjustments to stay current with Postgres 7.5 and R-1.9.0.</dt>
+											 <dt>- Add support for explicit argument names (requires Postgres 7.5devel).</dt>
+											 <dt><b>Documentation:</b></dt>
+											 <dt>- Update sgml to DocBook V4.2.</dt>
+											 <dt>- Add tip regarding /etc/ld.so.conf & ldconfig.</dt>
+											 <dt>- Mention explicit argument support.</dt>
+											 <dt>- Correct instances of &quot;returns record&quot; to &quot;returns setof record&quot;.</dt>
+											 <dt>- Add mention of load_r_typenames() (was missing entirely).</dt>
+											</dl>
+
+											<h3><b>Change log: 0.5.3-alpha to 0.5.4-alpha</b></h3>
+											<dl>
+											 <dt><b>Bug fixes:</b></dt>
+											 <dt>- Added additional R interpreter clean shutdown actions.</dt>
+											</dl>
+
+											<h3><b>Change log: 0.5.2-alpha to 0.5.3-alpha</b></h3>
+											<dl>
+											 <dt><b>Bug fixes:</b></dt>
+											 <dt>- Detect R version. Starting with R version 1.8.0 eliminate the need to use declarations from non-exported R headers.</dt>
+											</dl>
+
+											<h3><b>Change log: 0.5.1-alpha to 0.5.2-alpha</b></h3>
+											<dl>
+											 <dt><b>Bug fixes:</b></dt>
+											 <dt>- Fix portability issue when compiling for pg7.3 with older gcc versions.</dt>
+											 <dt><b>Documentation:</b></dt>
+											 <dt>- Document pg.state.firstpass</dt>
+											</dl>
+
+											<h3><b>Change log: 0.5.0-alpha to 0.5.1-alpha</b></h3>
+											<dl>
+											 <dt><b>Bug fixes:</b></dt>
+											 <dt>- Fix crash bug -- if ERROR occurred during SQL call, e.g. while using pg.spi.exec, R never got the chance to clean up properly. In some cases this would lead to a crash. Now sections that might possibly generate elog/ereports beneath plr's control while executing code called from the R interpreter are wrapped in "if (sigsetjmp(Warn_restart...". This grabs back control before it is returned to the postmaster, and allows us to call R's "error()" function. Now we can allow the R interpreter to gracefully clean up and exit with an error flagged. On the other side of the R eval call, we grab the error flag, and generate another error.</dt>
+											 <dt>- Fix for Rtmp[pid] directories left unremoved on backend exit -- add an exit callback using Postgres on_proc_exit() function. The callback function then calls Rstd_CleanUp().</dt>
+											 <dt>- Match change to PL/pgSQL by Tom Lane. When compiling a plr trigger function, include the OID of the table the trigger is attached to in the hashkey. This ensures that we will create separate compiled trees for each table the trigger is used with, avoiding possible datatype-mismatch problems if the tables have different rowtypes.</dt>
+											 <dt>- Minor documentation improvments</dt>
+											</dl>
+
+											<h3><b>Change log: 0.4.5-alpha to 0.5.0-alpha</b></h3>
+											<dl>
+											 <dt><b>Author's Note:</b> This release is probably the <emphasis>last</emphasis> alpha release.
+													 With the addition of trigger support, I think PL/R is (nearly?) feature complete.
+													 Note that there are some significant changes to semantics with respect to NULLs and NAs
+													 in this release.</dt>
+											 <dt>I'm very interested in feedback -- please find my email address in README.plr to report
+													 bugs, obvious omissions, etc. I'd also be interested in hearing how PL/R is being used.
+											 </dt>
+											 <dt><b>Enhancements:</b></dt>
+											 <dt>- Added trigger support, and corresponding documentation and regression test support</dt>
+											 <dt>- Adapted error reporting to new PostgreSQL 7.4 style, including error codes and nested contexts</dt>
+											 <dt>- Backported PostgreSQL 7.4 backend error reporting functions and enabled when building against Postgres 7.3</dt>
+											 <dt>- Modified compiled function caching to uniquely cache polymorphic functions based on runtime argument types</dt>
+											 <dt><b>Behavior changes/Bug fixes:</b></dt>
+											 <dt>- Fix behavior of empty vector return values when pg return type is a pg array. Did return NULL; now returns empty pg array of correct data type.</dt>
+											 <dt>- Fix behavior of NULL arguments for Postgres scalars and arrays. Did produce a single element vector with the element value of NA. Now produces a true R NULL object instead.</dt>
+											 <dt>- Fix behavior of NULL fields in Postgres composite types used as arguments. Now produces R object with NA in the corresponding column position.</dt>
+											 <dt>- Fix behavior when returning R data.frames or matrixes as Postgres composite types. Now correctly converts R "NA" values to Postgres "NULL" values in the result set.</dt>
+											 <dt>- Minor adjustment of returning of empty arrays; fix case of empty multidimensional arrays and data.frames</dt>
+											 <dt>- Adjust to change in call interface of get_fn_expr_rettype and get_fn_expr_argtype in PostgreSQL 7.4devel.</dt>
+											 <dt>- Changes needed to fix compilation under Postgres 7.3.</dt>
+											 <dt>- Now have two regression expected files -- one for 7.3 and one for 7.4.</dt>
+											 <dt>- Remove dims and dimnames attribute from data.frames created by pg_tuple_get_r_frame(). This fixes a problem that lm() was having with plr created data.frames, and appears to be correct based on the docs and data.frames created by R itself (examined using dput()).</dt>
+											 <dt>- Remove the preloaded TYPEOIDS and provide instead a new function, load_r_typenames(), that provides the same global variables in the R interpreter. But instead of making *every* connection pay the price, now it can be used on demand only when needed.</dt>
+											 <dt>- Reworked initialization functions -- now use plr_init when using the postgresql.conf preload_libraries parameter</dt>
+											 <dt>- Fixed problem with plr_SPI_context global not handling reentrancy correctly, leading to crash when throw_pg_notice was called from a nested plr function.</dt>
+											</dl>
+
+											<h3><b>Change log: 0.4.4-alpha to 0.4.5-alpha</b></h3>
+											<dl>
+											 <dt><b>Bug fixes:</b></dt>
+											 <dt>- Adjust to a change in the call interface of get_fn_expr_rettype() and get_fn_expr_argtype in PostgreSQL 7.4devel.</dt>
+											</dl>
+
+											<h3><b>Change log: 0.4.2-alpha to 0.4.4-alpha</b></h3>
+											<dl>
+											 <dt><b>Bug fixes:</b></dt>
+											 <dt>- Changed declaration of environ to something (hopefully) more portable</dt>
+											</dl>
+											<dl>
+											 <dt><b>Documentation:</b></dt>
+											 <dt>- Fixed synchronization of actual function names with those in the text/examples.</dt>
+											</dl>
+
+											<h3><b>Change log: 0.4.0-alpha to 0.4.2-alpha</b></h3>
+											<dl>
+											 <dt><b>Enhancements:</b></dt>
+											 <dt>- Remove the <i>--gui=none</i> argument from the embedded interpreter
+														 initialization. This allows use of a graphics device such as jpeg, so that charts
+														 can be rendered and spooled to disk for, e.g., pickup by a PHP script.
+											 </dt>
+											</dl>
+											<dl>
+											 <dt><b>Bug fixes:</b></dt>
+											 <dt>- Add missing include (exposed by recent Postgres 7.4devel change)</dt>
+											</dl>
+
+											<h3><b>Change log: 0.3.1-alpha to 0.4.0-alpha</b></h3>
+											<dl>
+											 <dt><b>Enhancements:</b></dt>
+											 <dt>- Added support for Postgres 7.4 polymorphic array types as arguments and return types</dt>
+											 <dt>- Added function reload_plr_modules to reload plr_modules after a change</dt>
+											 <dt>- Added function plr_environ to display environment variables</dt>
+											</dl>
+											<dl>
+											 <dt><b>Bug fixes:</b></dt>
+											 <dt>- Fix crashbug in load_r_cmd affecting functions loaded via plr_modules and install_rcmd()</dt>
+											</dl>
+											<dl>
+											 <dt><b>Documentation:</b></dt>
+											 <dt>- Updated installation notes for R 1.7.0 and Red Hat 9</dt>
+											 <dt>- Updated PostgreSQL Support Functions with new functions reload_plr_modules and plr_environ</dt>
+											 <dt>- Updated PostgreSQL Support Functions: existing array* function names changed to plr_array* to avoid conflict with PostgreSQL 7.4devel built in functions</dt>
+											</dl>
+
+											<h3><b>Change log: 0.3.0-alpha to 0.3.1-alpha</b></h3>
+											<dl>
+											 <dt><b>Bug fixes:</b></dt>
+											 <dt>- Minor change to regression test</dt>
+											</dl>
+											<dl>
+											 <dt><b>Documentation:</b></dt>
+											 <dt>- Note passage of regression test under PostgreSQL 7.4devel and R 1.7devel</dt>
+											</dl>
+
+											<h3><b>Change log: 0.1.0-alpha to 0.3.0-alpha</b></h3>
+											<dl>
+											 <dt><b>Enhancements:</b></dt>
+											 <dt>- Added case to allow returning setof scalar datatype -- until now, had to use record or define one column tuple type.</dt>
+											 <dt>- Added support for 3D PostgreSQL arrays as input arguments to PL/R functions.</dt>
+											 <dt>- Added support for returning 3D arrays. Specifically, if the R return value is a 3D array, and the PL/R function is declared to return an array type, the returned array will also be 3D.</dt>
+											 <dt>- Change start_interp from static to extern so that it can be called by the Postmaster during startup. This allows PL/R and R itself to be loaded and initialized before backends are forked, saving the startup time for each backend.</dt>
+											</dl>
+											<dl>
+											 <dt><b>Bug fixes:</b></dt>
+											 <dt>- Check for R_HOME defined in the environment and refuse to start if it isn't. If we don't, R will, and when it unexpectedly exits, we segfault.</dt>
+											 <dt>- Fix bug that allowed function returning record or tupletype, but not setof, to return all the rows instead of just one.</dt>
+											 <dt>- Fix bug that allowed function returning tuptype in targetlist to crash instead of just complaining about bad context.</dt>
+											 <dt>- Fix crash bug -- trap NULL msg pointer passed to throw_pg_notice(and error).</dt>
+											 <dt>- Fix bug: integer argument with value = 0 was converted to NA in R. Now appropriately passes the 0 value as-is.</dt>
+											</dl>
+											<dl>
+											 <dt><b>Documentation:</b></dt>
+											 <dt>- Adjust return type mapping table for "setof" scalar and composite.</dt>
+											 <dt>- Crossref module install with global data section.</dt>
+											 <dt>- Document '' (that is, empty string) used as function body if PostgreSQL and R function names match.</dt>
+											 <dt>- Added tip regarding setting R_HOME for postgres user before starting the postmaster.</dt>
+											 <dt>- Improve docs by moving "overview" to first, and renaming and improving old "intro", new "install" chapter.</dt>
+											 <dt>- References to arg[] changed to _arg and tip added.</dt>
+											 <dt>- Updated documentation for 3D array support.</dt>
+											</dl>
+										 </div>
+										 <div>
+										 <hr ALIGN="LEFT" WIdtH="100%">
+										 <table SUMMARY="Footer navigation table" WIdtH="100%" BORDER="0" CELLPADDING="0" CELLSPACING="0">
+											<tr>
+											 <td WIdtH="33%" ALIGN="left" VALIGN="top">&nbsp;</td>
+											 <td WIdtH="34%" ALIGN="center" VALIGN="top">&nbsp;</td>
+											 <td WIdtH="33%" ALIGN="right" VALIGN="top"><a href="doc/doc.html" ACCESSKEY="N">Next</a></td>
+											</tr>
+											<tr>
+											 <td WIdtH="33%" ALIGN="left" VALIGN="top">&nbsp;</td>
+											 <td WIdtH="34%" ALIGN="center" VALIGN="top">&nbsp;</td>
+											 <td WIdtH="33%" ALIGN="right" VALIGN="top">Documentation</td>
+											</tr>
+										 </table>
+									 </div>
+
+											<!-- end docs -->
+										</section>
+
+								</div>
+							</div>
+
+							<!-- Sidebar -->
+							<div id="sidebar">
+								<div class="inner">
+
+									<!-- Menu -->
+										<nav id="menu">
+											<header class="major">
+												<h2>Menu</h2>
+											</header>
+											<ul>
+												<li><a href="index.html#about">About Me</a></li>
+												<li><a href="index.html#presentations">Presentations</a></li>
+												<li><a href="index.html#source">Source Code</a></li>
+												<li><a href="notes.html">PL/R Notes</a></li>
+												<li><a href="plr.html">PL/R Documentation</a></li>
+											</ul>
+										</nav>
+
+									<!-- Section -->
+										<section>
+											<header class="major">
+												<h2>Get in touch</h2>
+											</header>
+											<ul class="contact">
+												<li class="fa-envelope-o"><a href="mailto:mail@joeconway.com">mail@joeconway.com</a></li>
+												<li class="fa-building-o"><a href="http://crunchydatasolutions.com/">Crunchy Data</a></li>
+											</ul>
+										</section>
+
+									<!-- Footer -->
+										<footer id="footer">
+											<p class="copyright">&copy; Untitled. All rights reserved. Image: <a href="https://pexels.com">Pexels</a>. Original template: <a href="https://html5up.net">HTML5 UP</a>. Modified by: <a href="http://sarahconway.com">Sarah Conway</a>.</p>
+										</footer>
+
+									</div>
+								</div>
+
+							</div>
+
+						<!-- Scripts -->
+							<script src="assets/js/jquery.min.js"></script>
+							<script src="assets/js/skel.min.js"></script>
+							<script src="assets/js/util.js"></script>
+							<!--[if lte IE 8]><script src="assets/js/ie/respond.min.js"></script><![endif]-->
+							<script src="assets/js/main.js"></script>
+
+					</body>
+				</html>
