@@ -1,6 +1,0 @@
-AuthUserFile     /var/www/webaccess/users
-AuthGroupFile    /var/www/webaccess/groups
-AuthName         "joeconway.com"
-AuthType         Basic
-require user jconway xian
-

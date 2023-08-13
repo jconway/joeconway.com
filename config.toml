@@ -1,0 +1,3 @@
+baseURL = "http://joeconway.com/"
+languageCode = "en-us"
+title = "My Hugo Site"
